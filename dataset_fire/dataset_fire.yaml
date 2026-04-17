@@ -1,0 +1,13 @@
+# YOLOv8 烟火检测数据集配置
+# 由 convert_voc2yolo_fire.py 自动生成
+
+path: D:/garbage_system/dataset_fire
+train: train/images
+val:   val/images
+
+nc: 2
+names: ['fire', 'smoke']
+
+# 类别说明:
+#   0: fire   - 火焰 (本数据集已标注)
+#   1: smoke  - 烟雾 (预留，可合并其他数据集补充)

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>社区垃圾分类识别系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; outline: none; }
+button, input, select, textarea { appearance: none; -webkit-appearance: none; }
+
+body {
+  font-family: 'Noto Sans SC', -apple-system, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+.top-bar {
+  background: white;
+  border-bottom: 1px solid #e8e8e8;
+  padding: 0 40px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #333;
+  text-decoration: none;
+  letter-spacing: 2px;
+}
+
+.site-name span { color: #4caf50; }
+
+.main-nav { display: flex; gap: 4px; }
+.main-nav a {
+  color: #888;
+  text-decoration: none;
+  padding: 7px 18px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+.main-nav a:hover { background: #f1f8e9; color: #4caf50; }
+.main-nav a.now { background: #4caf50; color: white; }
+
+.banner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 90px 32px 60px;
+  text-align: center;
+}
+
+.banner-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 2.6rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 14px;
+  letter-spacing: 4px;
+}
+
+.banner-title span { color: #4caf50; }
+
+.banner-desc {
+  font-size: 1rem;
+  color: #999;
+  margin-bottom: 36px;
+  font-weight: 300;
+}
+
+.go-btn {
+  display: inline-block;
+  padding: 13px 40px;
+  background: #4caf50;
+  color: white;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: all 0.25s;
+  box-shadow: 0 4px 14px rgba(76, 175, 80, 0.3);
+  letter-spacing: 1px;
+}
+
+.go-btn:hover {
+  background: #43a047;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(76, 175, 80, 0.4);
+}
+
+.card-list {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 32px 80px;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 22px;
+}
+
+.info-card {
+  background: white;
+  border-radius: 10px;
+  padding: 30px 24px;
+  text-align: center;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+  transition: all 0.3s;
+  border: 1px solid #f0f0f0;
+}
+
+.info-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.08);
+}
+
+.card-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  background: #f1f8e9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.card-icon svg {
+  width: 26px;
+  height: 26px;
+  stroke: #4caf50;
+  fill: none;
+  stroke-width: 1.8;
+}
+
+.card-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.card-note {
+  font-size: 0.88rem;
+  color: #999;
+  font-weight: 300;
+  line-height: 1.7;
+}
+
+.page-footer {
+  text-align: center;
+  padding: 28px;
+  color: #bbb;
+  font-size: 0.82rem;
+  border-top: 1px solid #ebebeb;
+}
+
+@media(max-width: 768px) {
+  .banner-title { font-size: 1.9rem; }
+  .card-list { grid-template-columns: 1fr; }
+  .top-bar { padding: 0 16px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <a class="site-name" href="/">社区<span>垃圾</span>分类</a>
+  <nav class="main-nav">
+    <a href="/" class="now">首页</a>
+    <a href="/detection">智慧分类检测</a>
+    <a href="/alerts">记录</a>
+    <a href="/statistics">统计</a>
+  </nav>
+</header>
+
+<section class="banner">
+  <h1 class="banner-title">社区垃圾<span>分类</span>识别系统</h1>
+  <p class="banner-desc">智能识别 &nbsp;·&nbsp; 自动预警 &nbsp;·&nbsp; 实时监控</p>
+  <a href="/detection" class="go-btn">开始检测</a>
+</section>
+
+<section class="card-list">
+  <div class="info-card">
+    <div class="card-icon">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    </div>
+    <h3 class="card-name">智能识别</h3>
+    <p class="card-note">基于深度学习，快速准确识别垃圾分类情况，自动标注检测框</p>
+  </div>
+  <div class="info-card">
+    <div class="card-icon">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><line x1="14" y1="17.5" x2="21" y2="17.5"/><line x1="17.5" y1="14" x2="17.5" y2="21"/></svg>
+    </div>
+    <h3 class="card-name">数据统计</h3>
+    <p class="card-note">实时记录检测数据，用图表展示分类趋势和预警统计情况</p>
+  </div>
+  <div class="info-card">
+    <div class="card-icon">
+      <svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+    </div>
+    <h3 class="card-name">自动预警</h3>
+    <p class="card-note">发现溢出、火情、散落等异常情况，自动记录并提示及时处理</p>
+  </div>
+</section>
+
+<footer class="page-footer">
+  <p>社区垃圾分类识别系统 &nbsp;·&nbsp; 广州华立学院</p>
+</footer>
+
+</body>
+</html>

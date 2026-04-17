@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+from collections import Counter
+from datetime import date, datetime
+from pathlib import Path
+
+import cv2
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
+
+from app.constants import ALL_CLASSES, BIN_TYPES
+from app.db_models import AlertRecord, DetectionRecord, VideoTaskRecord
+from app.utils import frame_to_base64, relative_to, save_image
+
+
+class RecordService:
+    def __init__(self, uploads_dir: Path):
+        self.uploads_dir = uploads_dir
+
+    def create_alert_record(
+        self,
+        db: Session,
+        scene: dict,
+        detections: list[dict],
+        rendered_image,
+        source: str,
+    ) -> AlertRecord | None:
+        if scene["alert_count"] <= 0:
+            return None
+
+        image_path = save_image(rendered_image, self.uploads_dir / "alerts")
+        record = AlertRecord(
+            record_uid=image_path.stem[-8:],
+            status=scene["status"],
+            alert_types=scene["alert_types"],
+            total_detections=scene["total"],
+            alert_count=scene["alert_count"],
+            result_image_path=relative_to(image_path, self.uploads_dir),
+            source=source,
+        )
+        db.add(record)
+        db.flush()
+
+        for detection in detections:
+            db.add(
+                DetectionRecord(
+                    alert_record_id=record.id,
+                    class_id=detection["class_id"],
+                    class_name=detection["class_name"],
+                    confidence=detection["confidence"],
+                    bbox=detection["bbox"],
+                    is_alert=detection["alert"],
+                    source_model=detection.get("source_model", ""),
+                ),
+            )
+
+        db.commit()
+        db.refresh(record)
+        return record
+
+    def list_alerts(self, db: Session, page: int, per_page: int, status: str) -> tuple[int, list[AlertRecord]]:
+        query = db.query(AlertRecord).order_by(AlertRecord.created_at.desc())
+        if status == "warning":
+            query = query.filter(AlertRecord.status != "normal")
+        elif status != "all":
+            query = query.filter(AlertRecord.status == status)
+
+        total = query.count()
+        records = (
+            query.options(selectinload(AlertRecord.detections))
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return total, records
+
+    def get_alert_image_base64(self, db: Session, record_uid: str) -> str | None:
+        record = db.query(AlertRecord).filter(AlertRecord.record_uid == record_uid).first()
+        if record is None or not record.result_image_path:
+            return None
+
+        image_path = self.uploads_dir / record.result_image_path
+        if not image_path.exists():
+            return None
+
+        image = cv2.imread(str(image_path))
+        if image is None:
+            return None
+        return frame_to_base64(image)
+
+    def build_statistics(self, db: Session, started_at: str) -> dict:
+        total_detections = db.query(func.count(DetectionRecord.id)).scalar() or 0
+        total_alerts = (
+            db.query(func.coalesce(func.sum(AlertRecord.alert_count), 0))
+            .filter(AlertRecord.status != "normal")
+            .scalar()
+            or 0
+        )
+        alert_record_count = db.query(func.count(AlertRecord.id)).scalar() or 0
+
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        today_alerts = (
+            db.query(func.count(AlertRecord.id))
+            .filter(AlertRecord.created_at >= today_start)
+            .filter(AlertRecord.status != "normal")
+            .scalar()
+            or 0
+        )
+
+        hourly_alerts = [0] * 24
+        alert_rows = (
+            db.query(AlertRecord.created_at)
+            .filter(AlertRecord.status != "normal")
+            .all()
+        )
+        for (created_at,) in alert_rows:
+            hourly_alerts[created_at.hour] += 1
+
+        counter = Counter()
+        class_rows = db.query(DetectionRecord.class_id, func.count(DetectionRecord.id)).group_by(DetectionRecord.class_id).all()
+        for class_id, count in class_rows:
+            counter[class_id] = count
+
+        class_stats = [
+            {
+                "class_id": class_id,
+                "class_name": ALL_CLASSES[class_id]["name"],
+                "count": count,
+                "is_alert": ALL_CLASSES[class_id]["alert"],
+            }
+            for class_id, count in counter.items()
+        ]
+        class_stats.sort(key=lambda item: item["count"], reverse=True)
+
+        return {
+            "total_detections": total_detections,
+            "total_alerts": total_alerts,
+            "today_alerts": today_alerts,
+            "hourly_alerts": hourly_alerts,
+            "class_stats": class_stats,
+            "start_time": started_at,
+            "alert_record_count": alert_record_count,
+        }
+
+    def upsert_video_task(
+        self,
+        db: Session,
+        task_id: str,
+        input_filename: str,
+        input_path: str,
+        status: str,
+        message: str = "",
+    ) -> VideoTaskRecord:
+        record = db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
+        if record is None:
+            record = VideoTaskRecord(
+                task_id=task_id,
+                input_filename=input_filename,
+                input_path=input_path,
+                status=status,
+                message=message,
+            )
+            db.add(record)
+        else:
+            record.status = status
+            record.message = message
+        db.commit()
+        db.refresh(record)
+        return record
+
+    def update_video_task(self, db: Session, task_id: str, **kwargs) -> VideoTaskRecord | None:
+        record = db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
+        if record is None:
+            return None
+        for key, value in kwargs.items():
+            setattr(record, key, value)
+        db.commit()
+        db.refresh(record)
+        return record
+
+    def get_video_task(self, db: Session, task_id: str) -> VideoTaskRecord | None:
+        return db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
+
+    def list_classes(self) -> dict:
+        classes = [
+            {
+                "id": class_id,
+                "name": info["name"],
+                "en": info["en"],
+                "alert": info["alert"],
+                "icon": info.get("icon", ""),
+            }
+            for class_id, info in ALL_CLASSES.items()
+        ]
+        return {"classes": classes, "bin_types": BIN_TYPES}

@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据集说明 - 垃圾分类系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; outline: none; }
+button, input, select, textarea { appearance: none; -webkit-appearance: none; }
+
+body {
+  font-family: 'Noto Sans SC', -apple-system, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  min-height: 100vh;
+}
+
+.top-bar {
+  background: white;
+  border-bottom: 1px solid #e8e8e8;
+  padding: 0 40px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #333;
+  text-decoration: none;
+  letter-spacing: 2px;
+}
+.site-name span { color: #4caf50; }
+
+.main-nav { display: flex; gap: 4px; }
+.main-nav a {
+  color: #999;
+  text-decoration: none;
+  padding: 7px 18px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+.main-nav a:hover { background: #f1f8e9; color: #4caf50; }
+.main-nav a.now { background: #4caf50; color: white; }
+
+.page-wrap {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 28px 32px;
+}
+
+.page-head {
+  margin-bottom: 24px;
+}
+
+.page-head h1 {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 6px;
+}
+.page-sub { color: #999; font-size: 0.9rem; }
+
+.box {
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+  padding: 24px;
+  margin-bottom: 20px;
+  border: 1px solid #f0f0f0;
+}
+
+.box-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #4caf50;
+  display: inline-block;
+}
+
+/* 统计卡 */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.stat-box {
+  background: #f9f9f9;
+  border: 1px solid #eeeeee;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.stat-big { font-size: 1.8rem; font-weight: 700; color: #333; }
+.stat-lbl { font-size: 0.8rem; color: #999; margin-top: 4px; }
+
+/* 进度条 */
+.dist-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.dist-name { width: 160px; font-size: 0.86rem; color: #555; }
+.bar-track {
+  flex: 1;
+  height: 18px;
+  background: #f0f0f0;
+  border-radius: 9px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: white;
+  transition: width 1s ease;
+}
+.dist-count { width: 70px; text-align: right; font-size: 0.82rem; color: #999; }
+
+.extra-info {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #f0f0f0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  font-size: 0.84rem;
+  line-height: 1.9;
+  color: #555;
+}
+.extra-info span { color: #bbb; }
+
+/* 代码块 */
+.code-block {
+  background: #f8f8f8;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 14px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 0.83rem;
+  color: #444;
+  overflow-x: auto;
+  white-space: pre;
+  line-height: 1.6;
+  margin-top: 8px;
+}
+
+.code-comment { color: #aaa; }
+.code-red   { color: #e53935; }
+.code-green { color: #43a047; }
+.code-ora   { color: #f57c00; }
+
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.col-label {
+  font-size: 0.83rem;
+  color: #999;
+  margin-bottom: 6px;
+}
+
+/* 命令框 */
+.cmd-box {
+  background: #f1f8e9;
+  border: 1px solid #c8e6c9;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-top: 14px;
+}
+.cmd-title { font-weight: 600; color: #388e3c; margin-bottom: 8px; font-size: 0.88rem; }
+.cmd-box .code-block { background: #fff; border-color: #c8e6c9; margin-top: 0; }
+
+/* 步骤 */
+.steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.step-box {
+  background: #f9f9f9;
+  border: 1px solid #eee;
+  border-radius: 8px;
+  padding: 18px;
+}
+.step-num {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #4caf50;
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+.step-name { font-weight: 600; color: #333; margin-bottom: 6px; font-size: 0.9rem; }
+.step-desc { font-size: 0.83rem; color: #888; line-height: 1.65; }
+
+code {
+  background: #f0f0f0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 0.82rem;
+  color: #555;
+}
+
+/* 表格 */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+th {
+  background: #f9f9f9;
+  color: #888;
+  font-weight: 500;
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #ebebeb;
+}
+td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f5f5f5;
+}
+tr:hover td { background: #fafafa; }
+
+.badge-warn { background: #ffebee; color: #e53935; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; }
+.badge-ok   { background: #e8f5e9; color: #43a047; padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; }
+
+.tip-box {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 7px;
+  font-size: 0.84rem;
+  color: #666;
+  line-height: 1.6;
+}
+.tip-box strong { color: #f57c00; }
+
+@media(max-width: 768px) {
+  .stat-row { grid-template-columns: 1fr 1fr; }
+  .two-col { grid-template-columns: 1fr; }
+  .steps { grid-template-columns: 1fr; }
+  .top-bar { padding: 0 16px; }
+  .page-wrap { padding: 16px; }
+  .dist-name { width: 100px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <a class="site-name" href="/">社区<span>垃圾</span>分类</a>
+  <nav class="main-nav">
+    <a href="/">首页</a>
+    <a href="/detection">检测</a>
+    <a href="/alerts">记录</a>
+    <a href="/statistics">统计</a>
+    <a href="/dataset" class="now">数据集</a>
+  </nav>
+</header>
+
+<div class="page-wrap">
+  <div class="page-head">
+    <h1>数据集说明</h1>
+    <p class="page-sub">真实标注数据集：3,349 张图像 &nbsp;·&nbsp; 8,990 个标注框 &nbsp;·&nbsp; Pascal VOC XML 格式</p>
+  </div>
+
+  <!-- 统计数字 -->
+  <div class="stat-row">
+    <div class="stat-box"><div class="stat-big">3,349</div><div class="stat-lbl">总图片数</div></div>
+    <div class="stat-box"><div class="stat-big">8,990</div><div class="stat-lbl">标注框总数</div></div>
+    <div class="stat-box"><div class="stat-big">3</div><div class="stat-lbl">目标类别数</div></div>
+    <div class="stat-box"><div class="stat-big">70.3%</div><div class="stat-lbl">多目标图占比</div></div>
+  </div>
+
+  <!-- 类别分布 -->
+  <div class="box">
+    <h2 class="box-title">标注类别分布（共 8,990 个标注框）</h2>
+
+    <div class="dist-row">
+      <div class="dist-name">garbage_bin（垃圾桶）</div>
+      <div class="bar-track"><div class="bar-fill" style="width:40%;background:#4caf50;">39.9%</div></div>
+      <div class="dist-count">3,584 框</div>
+    </div>
+    <div class="dist-row">
+      <div class="dist-name">overflow（垃圾溢出）</div>
+      <div class="bar-track"><div class="bar-fill" style="width:39%;background:#ef5350;">39.2%</div></div>
+      <div class="dist-count">3,525 框</div>
+    </div>
+    <div class="dist-row">
+      <div class="dist-name">garbage（散落垃圾）</div>
+      <div class="bar-track"><div class="bar-fill" style="width:21%;background:#ffa726;">20.9%</div></div>
+      <div class="dist-count">1,881 框</div>
+    </div>
+
+    <div class="extra-info">
+      <div>
+        <span>数据集来源：</span>社区实地拍摄 + 公开数据集增强<br>
+        <span>标注工具：</span>LabelImg（Pascal VOC XML 格式）<br>
+        <span>图像分辨率：</span>多样（344×499 到 891×501）
+      </div>
+      <div>
+        <span>train/val 划分：</span>80% / 20%（2,679 / 670 张）<br>
+        <span>多目标图片：</span>2,354 张（70.3%）<br>
+        <span>单目标图片：</span>995 张（29.7%）
+      </div>
+    </div>
+  </div>
+
+  <!-- 标注格式 -->
+  <div class="box">
+    <h2 class="box-title">标注格式说明（Pascal VOC XML）</h2>
+    <p style="font-size:0.86rem;color:#999;margin-bottom:14px;">每张图片对应一个 XML 文件，支持同一张图中标注多个目标框。</p>
+
+    <div class="two-col">
+      <div>
+        <div class="col-label">单目标示例（000003.xml）</div>
+        <div class="code-block">&lt;annotation&gt;
+  &lt;filename&gt;000003.jpg&lt;/filename&gt;
+  &lt;size&gt;
+    &lt;width&gt;891&lt;/width&gt;
+    &lt;height&gt;501&lt;/height&gt;
+    &lt;depth&gt;3&lt;/depth&gt;
+  &lt;/size&gt;
+  &lt;object&gt;
+    &lt;name&gt;garbage_bin&lt;/name&gt;
+    &lt;bndbox&gt;
+      &lt;xmin&gt;180&lt;/xmin&gt;
+      &lt;ymin&gt;120&lt;/ymin&gt;
+      &lt;xmax&gt;350&lt;/xmax&gt;
+      &lt;ymax&gt;460&lt;/ymax&gt;
+    &lt;/bndbox&gt;
+  &lt;/object&gt;
+&lt;/annotation&gt;</div>
+      </div>
+      <div>
+        <div class="col-label">多目标示例（000010.xml）</div>
+        <div class="code-block">&lt;annotation&gt;
+  &lt;filename&gt;000010.jpg&lt;/filename&gt;
+  &lt;size&gt;
+    &lt;width&gt;499&lt;/width&gt;
+    &lt;height&gt;346&lt;/height&gt;
+  &lt;/size&gt;
+  &lt;object&gt;
+    &lt;name&gt;<span class="code-red">overflow</span>&lt;/name&gt;
+    &lt;bndbox&gt;...&lt;/bndbox&gt;
+  &lt;/object&gt;
+  &lt;object&gt;
+    &lt;name&gt;<span class="code-green">garbage_bin</span>&lt;/name&gt;
+    &lt;bndbox&gt;...&lt;/bndbox&gt;
+  &lt;/object&gt;
+  &lt;object&gt;
+    &lt;name&gt;<span class="code-ora">garbage</span>&lt;/name&gt;
+    &lt;bndbox&gt;...&lt;/bndbox&gt;
+  &lt;/object&gt;
+&lt;/annotation&gt;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 格式转换 -->
+  <div class="box">
+    <h2 class="box-title">VOC 格式转换为 YOLO 格式</h2>
+    <p style="font-size:0.86rem;color:#999;margin-bottom:14px;">YOLOv8 需要 YOLO 格式标注（归一化中心坐标），运行转换脚本自动完成。</p>
+
+    <div class="two-col">
+      <div>
+        <div class="col-label">VOC 格式（绝对像素坐标）</div>
+        <div class="code-block">xmin=90, ymin=166, xmax=166, ymax=260
+图像大小: 499 × 346
+类别: overflow (id=1)</div>
+      </div>
+      <div>
+        <div class="col-label">YOLO 格式（归一化中心坐标）</div>
+        <div class="code-block">1 0.256513 0.614740 0.152304 0.272254
+<span class="code-comment"># 格式: class_id cx cy w h
+# 坐标均除以图像宽高，归一化到 [0,1]</span></div>
+      </div>
+    </div>
+
+    <div class="cmd-box">
+      <div class="cmd-title">一键转换命令</div>
+      <div class="code-block"><span class="code-comment"># 第一步：格式转换（VOC XML → YOLO txt + dataset.yaml）</span>
+py -3 D:\garbage_system\convert_voc2yolo.py
+
+<span class="code-comment"># 第二步：开始训练（需先安装：pip install ultralytics）</span>
+py -3 D:\garbage_system\train_yolo.py
+
+<span class="code-comment"># 第三步：仅验证已训练模型</span>
+py -3 D:\garbage_system\train_yolo.py --mode=val</div>
+    </div>
+  </div>
+
+  <!-- 训练流程 -->
+  <div class="box">
+    <h2 class="box-title">训练流程</h2>
+    <div class="steps">
+      <div class="step-box">
+        <div class="step-num">1</div>
+        <div class="step-name">数据准备</div>
+        <div class="step-desc">
+          运行 <code>convert_voc2yolo.py</code>，将 VOC XML 标注转换为 YOLO txt 格式，
+          按 8:2 自动分割 train/val，生成 <code>dataset.yaml</code> 配置文件。
+        </div>
+      </div>
+      <div class="step-box">
+        <div class="step-num">2</div>
+        <div class="step-name">模型训练</div>
+        <div class="step-desc">
+          运行 <code>train_yolo.py</code>，基于 YOLOv8n 预训练权重进行迁移学习，
+          100 轮训练加 20 轮早停，自动数据增强（mosaic、flip、旋转）。
+        </div>
+      </div>
+      <div class="step-box">
+        <div class="step-num">3</div>
+        <div class="step-name">部署推理</div>
+        <div class="step-desc">
+          训练完成后 <code>best.pt</code> 自动复制到系统路径，重启 <code>app.py</code>
+          即可加载真实模型，替换演示模式。
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 类别对照表 -->
+  <div class="box">
+    <h2 class="box-title">类别定义与预警规则</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>YOLO ID</th>
+          <th>VOC 标签</th>
+          <th>中文名称</th>
+          <th>是否触发预警</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>0</code></td>
+          <td><code>garbage_bin</code></td>
+          <td>垃圾桶</td>
+          <td><span class="badge-ok">正常</span></td>
+          <td>检测垃圾桶位置，用于判断溢出关联</td>
+        </tr>
+        <tr>
+          <td><code>1</code></td>
+          <td><code>overflow</code></td>
+          <td>垃圾溢出</td>
+          <td><span class="badge-warn">触发预警</span></td>
+          <td>垃圾堆积超出桶口，需立即处理</td>
+        </tr>
+        <tr>
+          <td><code>2</code></td>
+          <td><code>garbage</code></td>
+          <td>散落垃圾</td>
+          <td><span class="badge-warn">触发预警</span></td>
+          <td>桶周围地面有散落垃圾，影响环境卫生</td>
+        </tr>
+        <tr>
+          <td><code>3</code></td>
+          <td><code>fire</code></td>
+          <td>火焰</td>
+          <td><span class="badge-warn">触发预警</span></td>
+          <td>检测到明火，最高优先级预警</td>
+        </tr>
+        <tr>
+          <td><code>4</code></td>
+          <td><code>smoke</code></td>
+          <td>烟雾</td>
+          <td><span class="badge-warn">触发预警</span></td>
+          <td>检测到烟雾，次高优先级预警</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="tip-box">
+      <strong>数据集扩展建议：</strong>
+      可继续添加 <code>hazardous（有害垃圾）</code> 等类别，
+      使用 LabelImg 工具标注后重新训练即可扩展检测能力。
+    </div>
+  </div>
+
+  <!-- 参考代码 -->
+  <div class="box">
+    <h2 class="box-title">参考代码说明</h2>
+    <p style="font-size:0.86rem;color:#999;margin-bottom:14px;">
+      已有华为云垃圾分类比赛代码（40分类/图像分类），本系统在此基础上升级为目标检测（YOLOv8）。
+    </p>
+    <table>
+      <thead>
+        <tr><th>文件</th><th>说明</th><th>本系统使用情况</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>Network.py</code></td><td>ResNet50 / EfficientNet 分类网络</td><td>参考网络结构设计</td></tr>
+        <tr><td><code>data_gen.py</code></td><td>数据增强 + 标签平滑</td><td>数据增强策略参考</td></tr>
+        <tr><td><code>aug.py</code></td><td>imgaug 数据增强</td><td>翻转/旋转策略参考</td></tr>
+        <tr><td><code>train.py</code></td><td>训练主循环（Keras/TF1.x）</td><td>改为 ultralytics 实现</td></tr>
+        <tr><td><code>warmup_cosine_decay_scheduler.py</code></td><td>余弦退火学习率</td><td>YOLOv8 内置同等策略</td></tr>
+        <tr><td><code>customize_service.py</code></td><td>华为云推理接口</td><td>参考改写为 Flask API</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</body>
+</html>

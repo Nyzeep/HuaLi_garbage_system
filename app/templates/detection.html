@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智慧分类检测 - 垃圾分类系统</title>
+<style>
+:root {
+  --green: #4caf50;
+  --green2: #f1f8e9;
+  --orange: #ff9800;
+  --orange2: #fff8e1;
+  --red: #f44336;
+  --red2: #fce4ec;
+  --blue: #2196f3;
+  --blue2: #e3f2fd;
+  --text: #333;
+  --text2: #999;
+  --bg: #f5f5f5;
+  --white: #ffffff;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+.top-bar {
+  background: var(--white);
+  border-bottom: 1px solid #e8e8e8;
+  padding: 0 40px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-name span {
+  color: var(--green);
+}
+
+.main-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.main-nav a {
+  color: var(--text2);
+  text-decoration: none;
+  padding: 7px 16px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.main-nav a:hover {
+  background: var(--green2);
+  color: var(--green);
+}
+
+.main-nav a.now {
+  background: var(--green);
+  color: white;
+}
+
+.page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--white);
+  border: 1px solid #ddd;
+  padding: 20px;
+}
+
+.card-left {
+  flex: 1;
+}
+
+.card-right {
+  width: 300px;
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: bold;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+
+.btn-tab {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.btn-tab button {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #ddd;
+  background: #f5f5f5;
+  color: #888;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.btn-tab button.on {
+  background: var(--white);
+  color: var(--text);
+  font-weight: bold;
+  border-bottom: none;
+}
+
+.tab-box {
+  display: none;
+}
+
+.tab-box.on {
+  display: block;
+}
+
+.up-box {
+  display: block;
+  border: 2px solid #e0e0e0;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--white);
+}
+
+.up-box:hover {
+  border-color: var(--green);
+  background: var(--green2);
+}
+
+.up-box input {
+  display: none;
+}
+
+.up-icon {
+  font-size: 40px;
+  margin-bottom: 10px;
+}
+
+.up-text {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.up-hint {
+  color: #aaa;
+  font-size: 0.8rem;
+  margin-top: 5px;
+}
+
+.up-img {
+  margin-top: 16px;
+  display: none;
+}
+
+.up-img.on {
+  display: block;
+}
+
+.up-img img {
+  width: 100%;
+  border-radius: 6px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.btn {
+  flex: 1;
+  padding: 10px;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-green {
+  background: var(--green);
+  color: white;
+}
+
+.btn-green:hover {
+  background: #43a047;
+}
+
+.btn-gray {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid #ddd;
+}
+
+.btn-gray:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.loading {
+  display: none;
+  text-align: center;
+  padding: 30px;
+}
+
+.loading.on {
+  display: block;
+}
+
+.load-circle {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--green2);
+  border-top: 3px solid var(--green);
+  border-radius: 50%;
+  margin: 0 auto 8px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.load-text {
+  color: var(--text2);
+  font-size: 0.85rem;
+}
+
+.res-img {
+  width: 100%;
+  border-radius: 6px;
+  margin-top: 14px;
+  display: none;
+  border: 1px solid var(--green2);
+}
+
+.cam-video {
+  width: 100%;
+  border-radius: 6px;
+  background: var(--bg);
+  max-height: 320px;
+  object-fit: cover;
+  border: 1px solid #e8e8e8;
+}
+
+.cam-canvas {
+  display: none;
+}
+
+.cam-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.cam-row button {
+  flex: 1;
+  min-width: 90px;
+}
+
+.auto-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--text2);
+  cursor: pointer;
+}
+
+.auto-row input {
+  display: none;
+}
+
+.toggle {
+  width: 36px;
+  height: 18px;
+  background: #ccc;
+  border-radius: 9px;
+  position: relative;
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: white;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  transition: 0.3s;
+}
+
+.auto-row input:checked + .toggle {
+  background: var(--green);
+}
+
+.auto-row input:checked + .toggle::after {
+  left: 18px;
+}
+
+.empty {
+  text-align: center;
+  padding: 24px;
+  color: var(--text2);
+  font-size: 0.85rem;
+}
+
+.status-card {
+  text-align: center;
+  padding: 30px;
+}
+
+.status-card.danger {
+  background: var(--red2);
+}
+
+.status-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.status-title {
+  font-size: 1rem;
+  font-weight: bold;
+}
+
+.status-tip {
+  font-size: 0.8rem;
+  color: var(--text2);
+  margin-top: 4px;
+}
+
+.status-info {
+  margin-top: 12px;
+  padding: 10px;
+  background: #f9f9f9;
+  font-size: 0.8rem;
+  color: var(--text2);
+  text-align: left;
+  line-height: 1.6;
+}
+
+.list-box {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 5px;
+  margin-bottom: 8px;
+}
+
+.list-item.alarm {
+  background: var(--red2);
+  border: 1px solid #ef9a9a;
+}
+
+.list-name {
+  font-size: 0.85rem;
+}
+
+.conf {
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
+.conf-hi {
+  background: var(--green2);
+  color: var(--green);
+}
+
+.conf-md {
+  background: var(--orange2);
+  color: var(--orange);
+}
+
+.conf-lo {
+  background: var(--red2);
+  color: var(--red);
+}
+
+.count-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.count-box {
+  text-align: center;
+  padding: 14px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, var(--green2), #f5f5f5);
+}
+
+.count-box:nth-child(2) {
+  background: linear-gradient(135deg, var(--red2), #f5f5f5);
+}
+
+.count-num {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: var(--green);
+}
+
+.count-box:nth-child(2) .count-num {
+  color: var(--red);
+}
+
+.count-label {
+  font-size: 0.78rem;
+  color: var(--text2);
+  margin-top: 2px;
+}
+
+.video-progress {
+  margin-top: 10px;
+  height: 4px;
+  background: #ddd;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.video-progress-bar {
+  height: 100%;
+  background: var(--green);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.video-progress-text {
+  font-size: 0.75rem;
+  color: var(--text2);
+  margin-top: 4px;
+}
+
+@media (max-width: 800px) {
+  .row {
+    flex-direction: column;
+  }
+  .card-right {
+    width: 100%;
+  }
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <a class="site-name" href="/">社区<span>垃圾</span>分类</a>
+  <nav class="main-nav">
+    <a href="/">首页</a>
+    <a href="/detection" class="now">智慧分类检测</a>
+    <a href="/alerts">记录</a>
+    <a href="/statistics">统计</a>
+  </nav>
+</header>
+
+<main class="page">
+  <div class="row">
+    <div class="card card-left">
+      <div class="card-title">上传检测</div>
+
+      <div class="btn-tab">
+        <button class="on" onclick="switchTab('up', this)">图片上传</button>
+        <button onclick="switchTab('video', this)">视频上传</button>
+        <button onclick="switchTab('cam', this)">摄像头</button>
+      </div>
+
+      <div id="tab-up" class="tab-box on">
+        <label class="up-box" id="up-box">
+          <input type="file" id="file-input" accept="image/*">
+          <div class="up-icon">+</div>
+          <div class="up-text">点击选择图片，或拖拽到此处</div>
+          <div class="up-hint">支持 JPG、PNG、BMP 格式</div>
+        </label>
+
+        <div class="up-img" id="up-img">
+          <img id="pre-img" src="" alt="预览">
+          <div class="btn-row">
+            <button class="btn btn-green" id="det-btn" onclick="doDetect()">开始检测</button>
+            <button class="btn btn-gray" onclick="clearImg()">清除图片</button>
+          </div>
+        </div>
+
+        <div class="loading" id="up-loading">
+          <div class="load-circle"></div>
+          <div class="load-text">正在识别中，请稍候...</div>
+        </div>
+
+        <img class="res-img" id="res-img" src="" alt="结果">
+      </div>
+
+      <div id="tab-video" class="tab-box">
+        <label class="up-box" id="video-box">
+          <input type="file" id="video-input" accept="video/*">
+          <div class="up-icon">+</div>
+          <div class="up-text">点击选择视频，或拖拽到此处</div>
+          <div class="up-hint">支持 MP4、AVI、MOV 格式</div>
+        </label>
+
+        <div id="video-preview" style="display:none;margin-top:16px;">
+          <video id="video-player" controls style="width:100%;border-radius:6px;background:#000;max-height:400px;"></video>
+          <div class="btn-row">
+            <button class="btn btn-green" id="video-det-btn" onclick="doVideoDetect()">开始检测</button>
+            <button class="btn btn-gray" onclick="clearVideo()">清除视频</button>
+          </div>
+        </div>
+
+        <div class="loading" id="video-loading">
+          <div class="load-circle"></div>
+          <div class="load-text">正在检测视频，请稍候...</div>
+        </div>
+
+        <div id="video-result" style="display:none;margin-top:16px;">
+          <div style="font-size:0.85rem;color:#666;margin-bottom:8px;">检测结果视频：</div>
+          <video id="result-player" controls style="width:100%;border-radius:6px;background:#000;max-height:400px;"></video>
+          <div id="video-stats" style="margin-top:12px;padding:10px;background:#f9f9f9;border-radius:5px;font-size:0.8rem;color:#666;"></div>
+        </div>
+      </div>
+
+      <div id="tab-cam" class="tab-box">
+        <video class="cam-video" id="cam-video" autoplay playsinline muted></video>
+        <canvas class="cam-canvas" id="cam-canvas"></canvas>
+        <div class="cam-row">
+          <button class="btn btn-green" id="btn-open" onclick="openCam()">开启摄像头</button>
+          <button class="btn btn-gray" id="btn-close" onclick="closeCam()" disabled>关闭摄像头</button>
+          <button class="btn btn-gray" id="btn-snap" onclick="snapAndDetect()" disabled>拍照检测</button>
+        </div>
+        <label class="auto-row">
+          <input type="checkbox" id="auto-check" onchange="toggleAuto()">
+          <span class="toggle"></span>
+          <span>自动检测</span>
+          <select id="auto-interval" style="margin-left:8px;padding:4px 8px;border-radius:4px;border:1px solid #ddd;">
+            <option value="100">0.1秒</option>
+            <option value="1000">1秒</option>
+            <option value="3000" selected>3秒</option>
+          </select>
+        </label>
+        <div class="loading" id="cam-loading">
+          <div class="load-circle"></div>
+          <div class="load-text">正在识别中，请稍候...</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-right">
+      <div class="card-title">检测状态</div>
+      <div class="card status-card" id="status-box">
+        <div class="empty">等待上传图片...</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <div class="card-title">检测结果 <span id="det-num" style="font-weight:normal;color:#999;font-size:0.8rem;"></span></div>
+        <div class="list-box" id="det-list">
+          <div class="empty">暂无结果</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card card-right" style="margin-left:auto">
+      <div class="card-title">本次统计</div>
+      <div class="count-row">
+        <div class="count-box">
+          <div class="count-num" id="count-total">0</div>
+          <div class="count-label">检测次数</div>
+        </div>
+        <div class="count-box">
+          <div class="count-num" id="count-alarm">0</div>
+          <div class="count-label">预警次数</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+var camStream = null;
+var autoTimer = null;
+var totalCount = 0;
+var alarmCount = 0;
+
+var nameMap = {
+  0: '垃圾桶',
+  1: '垃圾溢出',
+  2: '散落垃圾',
+  3: '火焰',
+  4: '烟雾'
+};
+
+function switchTab(name, btn) {
+  var tabs = document.querySelectorAll('.btn-tab button');
+  for (var i = 0; i < tabs.length; i++) {
+    tabs[i].classList.remove('on');
+  }
+  btn.classList.add('on');
+
+  var panels = document.querySelectorAll('.tab-box');
+  for (var i = 0; i < panels.length; i++) {
+    panels[i].classList.remove('on');
+  }
+  document.getElementById('tab-' + name).classList.add('on');
+
+  if (name !== 'cam') {
+    closeCam();
+  }
+}
+
+var fileInput = document.getElementById('file-input');
+var upImg = document.getElementById('up-img');
+var preImg = document.getElementById('pre-img');
+
+fileInput.addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    preImg.src = ev.target.result;
+    upImg.classList.add('on');
+    document.getElementById('res-img').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+});
+
+var upBox = document.getElementById('up-box');
+
+upBox.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  upBox.style.borderColor = 'var(--green)';
+  upBox.style.background = 'var(--green2)';
+});
+
+upBox.addEventListener('dragleave', function(e) {
+  e.preventDefault();
+  upBox.style.borderColor = '#e0e0e0';
+  upBox.style.background = 'white';
+});
+
+upBox.addEventListener('drop', function(e) {
+  e.preventDefault();
+  upBox.style.borderColor = '#e0e0e0';
+  upBox.style.background = 'white';
+
+  if (e.dataTransfer.files.length > 0) {
+    fileInput.files = e.dataTransfer.files;
+    fileInput.dispatchEvent(new Event('change'));
+  }
+});
+
+function clearImg() {
+  fileInput.value = '';
+  upImg.classList.remove('on');
+  document.getElementById('res-img').style.display = 'none';
+  resetStatus();
+}
+
+async function doDetect() {
+  var file = fileInput.files[0];
+  if (!file) {
+    alert('请先选择一张图片');
+    return;
+  }
+
+  document.getElementById('det-btn').disabled = true;
+  showLoad('up-loading', true);
+
+  var formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    var resp = await fetch('/api/detect/image', { method: 'POST', body: formData });
+    var data = await resp.json();
+
+    if (data.success) {
+      showResult(data);
+      if (data.result_image) {
+        var pic = document.getElementById('res-img');
+        pic.src = 'data:image/jpeg;base64,' + data.result_image;
+        pic.style.display = 'block';
+      }
+    } else {
+      alert('检测失败，请重试');
+    }
+  } catch (err) {
+    alert('网络错误，请检查服务是否正常运行');
+  }
+
+  showLoad('up-loading', false);
+  document.getElementById('det-btn').disabled = false;
+}
+
+async function openCam() {
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    document.getElementById('cam-video').srcObject = camStream;
+    document.getElementById('btn-open').disabled = true;
+    document.getElementById('btn-close').disabled = false;
+    document.getElementById('btn-snap').disabled = false;
+  } catch (e) {
+    alert('无法访问摄像头，请确认已授予摄像头权限');
+  }
+}
+
+function closeCam() {
+  if (autoTimer) {
+    clearInterval(autoTimer);
+    autoTimer = null;
+  }
+  document.getElementById('auto-check').checked = false;
+
+  if (camStream) {
+    camStream.getTracks().forEach(function(t) {
+      t.stop();
+    });
+    camStream = null;
+  }
+
+  document.getElementById('btn-open').disabled = false;
+  document.getElementById('btn-close').disabled = true;
+  document.getElementById('btn-snap').disabled = true;
+}
+
+function snapAndDetect() {
+  var video = document.getElementById('cam-video');
+  var canvas = document.getElementById('cam-canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  sendImg(canvas.toDataURL('image/jpeg', 0.85), 'cam-loading');
+}
+
+function toggleAuto() {
+  var on = document.getElementById('auto-check').checked;
+  if (on) {
+    if (!camStream) {
+      document.getElementById('auto-check').checked = false;
+      alert('请先开启摄像头');
+      return;
+    }
+    var interval = parseInt(document.getElementById('auto-interval').value);
+    autoTimer = setInterval(snapAndDetect, interval);
+  } else {
+    if (autoTimer) {
+      clearInterval(autoTimer);
+      autoTimer = null;
+    }
+  }
+}
+
+async function sendImg(imgData, loadId) {
+  showLoad(loadId, true);
+  try {
+    var resp = await fetch('/api/detect/base64', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imgData })
+    });
+    var data = await resp.json();
+    if (data.success) {
+      showResult(data);
+    }
+  } catch (err) {
+  }
+  showLoad(loadId, false);
+}
+
+function showResult(data) {
+  totalCount++;
+  document.getElementById('count-total').textContent = totalCount;
+
+  var scene = data.scene;
+  var dets = data.detections || [];
+  var hasAlarm = scene.alert_count > 0;
+
+  if (hasAlarm) {
+    alarmCount++;
+    document.getElementById('count-alarm').textContent = alarmCount;
+  }
+
+  var box = document.getElementById('status-box');
+  if (hasAlarm) {
+    box.className = 'card status-card danger';
+    box.innerHTML =
+      '<div class="status-icon">!</div>' +
+      '<div class="status-title">检测到异常情况</div>' +
+      '<div class="status-tip">请尽快处理以下问题</div>' +
+      '<div class="status-info">共检测到 ' + scene.total + ' 个目标，需关注 ' + scene.alert_count + ' 个<br>' +
+      (scene.alert_types.length ? scene.alert_types.join('、') : '所有目标正常') + '</div>';
+  } else {
+    box.className = 'card status-card';
+    box.innerHTML =
+      '<div class="status-icon">V</div>' +
+      '<div class="status-title">检测正常</div>' +
+      '<div class="status-tip">未发现违规情况</div>' +
+      '<div class="status-info">共检测到 ' + scene.total + ' 个目标</div>';
+  }
+
+  document.getElementById('det-num').textContent = '（' + dets.length + ' 个）';
+
+  var list = document.getElementById('det-list');
+  if (!dets.length) {
+    list.innerHTML = '<div class="empty">未检测到任何目标</div>';
+    return;
+  }
+
+  var html = '';
+  for (var i = 0; i < dets.length; i++) {
+    var d = dets[i];
+    var conf = d.confidence;
+    var confClass = 'conf-hi';
+    if (conf < 0.8) confClass = 'conf-md';
+    if (conf < 0.6) confClass = 'conf-lo';
+
+    var name = nameMap[d.class_id] || ('类别' + d.class_id);
+    var alarmClass = d.alert ? ' alarm' : '';
+
+    html += '<div class="list-item' + alarmClass + '">' +
+      '<div class="list-name">' + name + '</div>' +
+      '<div class="conf ' + confClass + '">' + (conf * 100).toFixed(1) + '%</div>' +
+    '</div>';
+  }
+  list.innerHTML = html;
+}
+
+function resetStatus() {
+  var box = document.getElementById('status-box');
+  box.className = 'card status-card';
+  box.innerHTML = '<div class="empty">等待上传图片...</div>';
+  document.getElementById('det-list').innerHTML = '<div class="empty">暂无结果</div>';
+  document.getElementById('det-num').textContent = '';
+}
+
+function showLoad(id, on) {
+  var el = document.getElementById(id);
+  if (on) {
+    el.classList.add('on');
+  } else {
+    el.classList.remove('on');
+  }
+}
+
+// 视频上传相关
+var videoInput = document.getElementById('video-input');
+var videoBox = document.getElementById('video-box');
+var videoPreview = document.getElementById('video-preview');
+var videoPlayer = document.getElementById('video-player');
+var videoDetBtn = document.getElementById('video-det-btn');
+var videoLoading = document.getElementById('video-loading');
+var videoResult = document.getElementById('video-result');
+var resultPlayer = document.getElementById('result-player');
+var videoStats = document.getElementById('video-stats');
+var selectedVideoFile = null;
+
+videoInput.addEventListener('change', function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+
+  selectedVideoFile = file;
+  var url = URL.createObjectURL(file);
+  videoPlayer.src = url;
+  videoPreview.style.display = 'block';
+  videoBox.style.display = 'none';
+  videoResult.style.display = 'none';
+});
+
+videoBox.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  videoBox.style.borderColor = 'var(--green)';
+  videoBox.style.background = 'var(--green2)';
+});
+
+videoBox.addEventListener('dragleave', function(e) {
+  e.preventDefault();
+  videoBox.style.borderColor = '#e0e0e0';
+  videoBox.style.background = 'white';
+});
+
+videoBox.addEventListener('drop', function(e) {
+  e.preventDefault();
+  videoBox.style.borderColor = '#e0e0e0';
+  videoBox.style.background = 'white';
+
+  if (e.dataTransfer.files.length > 0) {
+    var file = e.dataTransfer.files[0];
+    if (file.type.startsWith('video/')) {
+      videoInput.files = e.dataTransfer.files;
+      videoInput.dispatchEvent(new Event('change'));
+    }
+  }
+});
+
+function clearVideo() {
+  videoInput.value = '';
+  selectedVideoFile = null;
+  videoPlayer.src = '';
+  videoPreview.style.display = 'none';
+  videoBox.style.display = 'block';
+  videoResult.style.display = 'none';
+  resetStatus();
+}
+
+async function doVideoDetect() {
+  if (!selectedVideoFile) {
+    alert('请先选择一段视频');
+    return;
+  }
+
+  videoDetBtn.disabled = true;
+  videoLoading.classList.add('on');
+  videoResult.style.display = 'none';
+
+  var formData = new FormData();
+  formData.append('file', selectedVideoFile);
+  formData.append('skip_frames', 3);
+
+  try {
+    var resp = await fetch('/api/detect/video', { method: 'POST', body: formData });
+    var data = await resp.json();
+
+    if (data.success) {
+      resultPlayer.src = '/uploads/' + data.result_video;
+      videoResult.style.display = 'block';
+
+      // 显示统计信息
+      var stats = data.stats || {};
+      var statsHtml = '检测完成！';
+      if (stats.total_frames) {
+        statsHtml += '<br>处理帧数：' + stats.total_frames;
+      }
+      if (stats.total_detections !== undefined) {
+        statsHtml += '<br>检测目标数：' + stats.total_detections;
+      }
+      videoStats.innerHTML = statsHtml;
+
+      showResult(data);
+    } else {
+      alert('检测失败：' + (data.error || '请重试'));
+    }
+  } catch (err) {
+    alert('网络错误，请检查服务是否正常运行');
+  }
+
+  videoLoading.classList.remove('on');
+  videoDetBtn.disabled = false;
+}
+doVideoDetect = async function() {
+  if (!selectedVideoFile) {
+    alert('请先选择一段视频');
+    return;
+  }
+
+  videoDetBtn.disabled = true;
+  videoLoading.classList.add('on');
+  videoResult.style.display = 'none';
+
+  var formData = new FormData();
+  formData.append('file', selectedVideoFile);
+  formData.append('skip_frames', 3);
+
+  try {
+    var resp = await fetch('/api/detect/video', { method: 'POST', body: formData });
+    var data = await resp.json();
+
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || '视频任务提交失败');
+    }
+
+    await pollVideoTaskAsync(data.task_id);
+  } catch (err) {
+    videoLoading.classList.remove('on');
+    videoDetBtn.disabled = false;
+    alert('处理失败：' + (err.message || '请稍后重试'));
+  }
+};
+
+async function pollVideoTaskAsync(taskId) {
+  while (true) {
+    var resp = await fetch('/api/tasks/' + taskId);
+    var data = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(data.error || '任务状态查询失败');
+    }
+
+    videoStats.innerHTML = '任务状态：' + data.status + '<br>' +
+      '进度：' + data.progress + '%<br>' +
+      (data.message || '');
+
+    if (data.status === 'completed') {
+      var stats = data.stats || {};
+      resultPlayer.src = '/uploads/' + data.result_video;
+      videoResult.style.display = 'block';
+      videoStats.innerHTML =
+        '处理完成<br>' +
+        '总帧数：' + (stats.total_frames || 0) + '<br>' +
+        '检测目标：' + (stats.total_detections || 0) + '<br>' +
+        '预警次数：' + (stats.total_alerts || 0);
+      videoLoading.classList.remove('on');
+      videoDetBtn.disabled = false;
+      return;
+    }
+
+    if (data.status === 'failed') {
+      throw new Error(data.message || '视频处理失败');
+    }
+
+    await new Promise(function(resolve) { setTimeout(resolve, 1500); });
+  }
+}
+</script>
+
+</body>
+</html>

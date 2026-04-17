@@ -1,0 +1,39 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - link "社区垃圾分类" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - navigation [ref=e4]:
+      - link "首页" [ref=e5] [cursor=pointer]:
+        - /url: /
+      - link "检测" [ref=e6] [cursor=pointer]:
+        - /url: /detection
+      - link "记录" [ref=e7] [cursor=pointer]:
+        - /url: /alerts
+      - link "统计" [ref=e8] [cursor=pointer]:
+        - /url: /statistics
+  - main [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - generic [ref=e12]: 上传检测
+        - generic [ref=e13]:
+          - button "图片上传" [ref=e14] [cursor=pointer]
+          - button "摄像头" [ref=e15] [cursor=pointer]
+        - generic [ref=e17] [cursor=pointer]:
+          - generic [ref=e18]: +
+          - generic [ref=e19]: 点击选择图片，或拖拽到此处
+          - generic [ref=e20]: 支持 JPG、PNG、BMP 格式
+      - generic [ref=e21]:
+        - generic [ref=e22]: 检测状态
+        - generic [ref=e24]: 等待上传图片...
+        - generic [ref=e25]:
+          - generic [ref=e26]: 检测结果
+          - generic [ref=e28]: 暂无结果
+    - generic [ref=e30]:
+      - generic [ref=e31]: 本次统计
+      - generic [ref=e32]:
+        - generic [ref=e33]:
+          - generic [ref=e34]: "0"
+          - generic [ref=e35]: 检测次数
+        - generic [ref=e36]:
+          - generic [ref=e37]: "0"
+          - generic [ref=e38]: 预警次数

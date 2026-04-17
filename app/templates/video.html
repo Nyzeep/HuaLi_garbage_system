@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频检测 - 垃圾分类系统</title>
+<style>
+:root {
+  --green: #4caf50;
+  --green2: #f1f8e9;
+  --orange: #ff9800;
+  --orange2: #fff8e1;
+  --red: #f44336;
+  --red2: #fce4ec;
+  --blue: #2196f3;
+  --blue2: #e3f2fd;
+  --text: #333;
+  --text2: #999;
+  --bg: #f5f5f5;
+  --white: #ffffff;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+.top-bar {
+  background: var(--white);
+  border-bottom: 1px solid #e8e8e8;
+  padding: 0 40px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-size: 1.2rem;
+  font-weight: bold;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-name span {
+  color: var(--green);
+}
+
+.main-nav {
+  display: flex;
+  gap: 4px;
+}
+
+.main-nav a {
+  color: var(--text2);
+  text-decoration: none;
+  padding: 7px 16px;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+.main-nav a:hover {
+  background: var(--green2);
+  color: var(--green);
+}
+
+.main-nav a.now {
+  background: var(--green);
+  color: white;
+}
+
+.page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--white);
+  border: 1px solid #ddd;
+  padding: 20px;
+}
+
+.card-left {
+  flex: 1;
+}
+
+.card-right {
+  width: 320px;
+}
+
+.card-title {
+  font-size: 1rem;
+  font-weight: bold;
+  margin-bottom: 16px;
+  color: var(--text);
+}
+
+.up-box {
+  display: block;
+  border: 2px dashed #e0e0e0;
+  padding: 40px 20px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--white);
+  border-radius: 6px;
+  transition: all 0.3s;
+}
+
+.up-box:hover {
+  border-color: var(--green);
+  background: var(--green2);
+}
+
+.up-box.dragover {
+  border-color: var(--green);
+  background: var(--green2);
+}
+
+.up-box input {
+  display: none;
+}
+
+.up-icon {
+  font-size: 40px;
+  margin-bottom: 10px;
+}
+
+.up-text {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.up-hint {
+  color: #aaa;
+  font-size: 0.8rem;
+  margin-top: 5px;
+}
+
+.file-info {
+  display: none;
+  background: var(--green2);
+  padding: 12px;
+  border-radius: 6px;
+  margin-top: 12px;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--green);
+}
+
+.file-info .name {
+  font-weight: bold;
+}
+
+.file-info .remove {
+  color: var(--red);
+  cursor: pointer;
+  margin-left: 10px;
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.btn {
+  flex: 1;
+  padding: 10px;
+  border-radius: 5px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-green {
+  background: var(--green);
+  color: white;
+}
+
+.btn-green:hover {
+  background: #43a047;
+}
+
+.btn-green:disabled {
+  background: #a5d6a7;
+  cursor: not-allowed;
+}
+
+.btn-gray {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid #ddd;
+}
+
+.btn-gray:hover {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.loading {
+  display: none;
+  text-align: center;
+  padding: 30px;
+}
+
+.loading.on {
+  display: block;
+}
+
+.load-circle {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--green2);
+  border-top: 3px solid var(--green);
+  border-radius: 50%;
+  margin: 0 auto 8px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.load-text {
+  color: var(--text2);
+  font-size: 0.85rem;
+}
+
+.progress-box {
+  display: none;
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.progress-box.on {
+  display: block;
+}
+
+.progress-text {
+  font-size: 0.85rem;
+  color: var(--text2);
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.progress-bar {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--green);
+  width: 0%;
+  transition: width 0.3s;
+}
+
+.result-box {
+  display: none;
+  margin-top: 16px;
+}
+
+.result-box.on {
+  display: block;
+}
+
+.result-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat-item {
+  background: var(--green2);
+  padding: 12px 8px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.stat-value {
+  font-size: 1.4rem;
+  font-weight: bold;
+  color: var(--green);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  color: var(--text2);
+  margin-top: 2px;
+}
+
+.result-video {
+  width: 100%;
+  border-radius: 6px;
+  background: #000;
+  margin-top: 12px;
+}
+
+.tip-box {
+  background: var(--orange2);
+  border-left: 3px solid var(--orange);
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: #e65100;
+  margin-top: 12px;
+}
+
+.tip-box strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.download-btn {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 8px 20px;
+  background: var(--green);
+  color: white;
+  text-decoration: none;
+  border-radius: 5px;
+  font-size: 0.85rem;
+}
+
+.download-btn:hover {
+  background: #43a047;
+}
+
+.option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--text2);
+}
+
+.option-row select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: white;
+}
+
+.status-card {
+  padding: 16px;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.status-card.danger {
+  background: var(--red2);
+  border: 1px solid var(--red);
+}
+
+.status-card.danger .status-icon {
+  color: var(--red);
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+
+.status-card.danger .status-title {
+  color: var(--red);
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.status-card.danger .status-info {
+  color: var(--text2);
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+
+.status-card.normal {
+  background: var(--green2);
+  border: 1px solid var(--green);
+}
+
+.status-card.normal .status-icon {
+  color: var(--green);
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+
+.status-card.normal .status-title {
+  color: var(--green);
+  font-weight: bold;
+  font-size: 0.9rem;
+}
+
+.status-card.normal .status-info {
+  color: var(--text2);
+  font-size: 0.8rem;
+  margin-top: 6px;
+}
+
+.empty {
+  color: var(--text2);
+  font-size: 0.85rem;
+  padding: 20px;
+  text-align: center;
+}
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <a href="/" class="site-name">智慧<span>垃圾</span>分类系统</a>
+  <div class="main-nav">
+    <a href="/">首页</a>
+    <a href="/detection" class="now">智慧分类检测</a>
+    <a href="/alerts">预警记录</a>
+    <a href="/statistics">数据统计</a>
+  </div>
+</div>
+
+<div class="page">
+  <div class="row">
+    <!-- 左侧：上传和控制 -->
+    <div class="card card-left">
+      <div class="card-title">📹 视频上传</div>
+      
+      <label class="up-box" id="upBox">
+        <input type="file" id="fileInput" accept="video/mp4,video/avi,video/quicktime,video/x-msvideo">
+        <div class="up-icon">🎬</div>
+        <div class="up-text">点击或拖拽上传视频</div>
+        <div class="up-hint">支持 MP4、AVI、MOV 格式</div>
+      </label>
+
+      <div class="file-info" id="fileInfo">
+        <span class="name" id="fileName"></span>
+        <span class="remove" id="removeFile">✕ 移除</span>
+      </div>
+
+      <div class="option-row">
+        <span>跳帧处理：</span>
+        <select id="skipFrames">
+          <option value="1">每帧检测（最慢）</option>
+          <option value="3" selected>每3帧检测1次（推荐）</option>
+          <option value="5">每5帧检测1次（较快）</option>
+          <option value="10">每10帧检测1次（最快）</option>
+        </select>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-green" id="detectBtn" disabled>开始检测</button>
+        <button class="btn btn-gray" id="resetBtn">重置</button>
+      </div>
+
+      <div class="loading" id="loadingBox">
+        <div class="load-circle"></div>
+        <div class="load-text">正在上传和处理视频，请稍候...</div>
+      </div>
+
+      <div class="progress-box" id="progressBox">
+        <div class="progress-text" id="progressText">处理中...</div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧：结果 -->
+    <div class="card card-right">
+      <div class="card-title">检测结果</div>
+      
+      <div class="status-card normal" id="statusBox">
+        <div class="empty">等待上传视频...</div>
+      </div>
+
+      <div class="result-box" id="resultBox">
+        <div class="result-stats">
+          <div class="stat-item">
+            <div class="stat-value" id="statFrames">0</div>
+            <div class="stat-label">处理帧数</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="statDetected">0</div>
+            <div class="stat-label">检测目标</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="statAlerts">0</div>
+            <div class="stat-label">预警次数</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value" id="statVideo">-</div>
+            <div class="stat-label">视频信息</div>
+          </div>
+        </div>
+
+        <video class="result-video" id="resultVideo" controls playsinline>
+          您的浏览器不支持视频播放
+        </video>
+
+        <div class="tip-box" id="tipBox">
+          <strong>⚠️ 注意</strong>
+          如果视频无法播放，请下载后用本地播放器（PotPlayer、VLC）查看
+        </div>
+
+        <a class="download-btn" id="downloadBtn" download>📥 下载视频</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const upBox = document.getElementById('upBox');
+const fileInput = document.getElementById('fileInput');
+const fileInfo = document.getElementById('fileInfo');
+const fileName = document.getElementById('fileName');
+const removeFile = document.getElementById('removeFile');
+const detectBtn = document.getElementById('detectBtn');
+const resetBtn = document.getElementById('resetBtn');
+const loadingBox = document.getElementById('loadingBox');
+const progressBox = document.getElementById('progressBox');
+const progressText = document.getElementById('progressText');
+const progressFill = document.getElementById('progressFill');
+const statusBox = document.getElementById('statusBox');
+const resultBox = document.getElementById('resultBox');
+const resultVideo = document.getElementById('resultVideo');
+const downloadBtn = document.getElementById('downloadBtn');
+const tipBox = document.getElementById('tipBox');
+
+let selectedFile = null;
+
+// 拖拽上传
+upBox.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  upBox.classList.add('dragover');
+});
+
+upBox.addEventListener('dragleave', () => {
+  upBox.classList.remove('dragover');
+});
+
+upBox.addEventListener('drop', (e) => {
+  e.preventDefault();
+  upBox.classList.remove('dragover');
+  if (e.dataTransfer.files.length > 0) {
+    handleFile(e.dataTransfer.files[0]);
+  }
+});
+
+upBox.addEventListener('click', () => fileInput.click());
+
+fileInput.addEventListener('change', (e) => {
+  if (e.target.files.length > 0) {
+    handleFile(e.target.files[0]);
+  }
+});
+
+function handleFile(file) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  const validExts = ['mp4', 'avi', 'mov', 'mkv'];
+  
+  if (!validExts.includes(ext)) {
+    alert('请上传视频文件（MP4、AVI、MOV、MKV）');
+    return;
+  }
+  
+  if (file.size > 200 * 1024 * 1024) {
+    alert('视频文件不能超过200MB');
+    return;
+  }
+  
+  selectedFile = file;
+  fileName.textContent = file.name + ' (' + formatSize(file.size) + ')';
+  fileInfo.style.display = 'block';
+  upBox.style.display = 'none';
+  detectBtn.disabled = false;
+  
+  statusBox.className = 'status-card normal';
+  statusBox.innerHTML = '<div class="empty">已选择视频，准备检测...</div>';
+  resultBox.classList.remove('on');
+}
+
+removeFile.addEventListener('click', () => {
+  selectedFile = null;
+  fileInput.value = '';
+  fileInfo.style.display = 'none';
+  upBox.style.display = 'block';
+  detectBtn.disabled = true;
+  statusBox.className = 'status-card normal';
+  statusBox.innerHTML = '<div class="empty">等待上传视频...</div>';
+  resultBox.classList.remove('on');
+});
+
+resetBtn.addEventListener('click', () => {
+  selectedFile = null;
+  fileInput.value = '';
+  fileInfo.style.display = 'none';
+  upBox.style.display = 'block';
+  detectBtn.disabled = true;
+  loadingBox.classList.remove('on');
+  progressBox.classList.remove('on');
+  resultBox.classList.remove('on');
+  statusBox.className = 'status-card normal';
+  statusBox.innerHTML = '<div class="empty">等待上传视频...</div>';
+});
+
+function formatSize(bytes) {
+  if (bytes < 1024 * 1024) {
+    return (bytes / 1024).toFixed(1) + ' KB';
+  }
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+detectBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  
+  detectBtn.disabled = true;
+  loadingBox.classList.add('on');
+  progressBox.classList.remove('on');
+  resultBox.classList.remove('on');
+  
+  statusBox.className = 'status-card normal';
+  statusBox.innerHTML = '<div class="empty">正在上传和处理视频...</div>';
+  
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+  formData.append('skip_frames', document.getElementById('skipFrames').value);
+  
+  try {
+    loadingBox.classList.remove('on');
+    progressBox.classList.add('on');
+    progressText.textContent = '正在处理视频，请稍候...';
+    progressFill.style.width = '30%';
+    
+    const response = await fetch('/api/detect/video', {
+      method: 'POST',
+      body: formData
+    });
+    
+    progressFill.style.width = '80%';
+    
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || '处理失败');
+    }
+    
+    const result = await response.json();
+    
+    progressFill.style.width = '100%';
+    progressText.textContent = '处理完成！';
+    
+    setTimeout(() => {
+      progressBox.classList.remove('on');
+      resultBox.classList.add('on');
+      
+      // 更新统计数据
+      document.getElementById('statFrames').textContent = result.stats.total_frames;
+      document.getElementById('statDetected').textContent = result.stats.total_detections;
+      document.getElementById('statAlerts').textContent = result.stats.total_alerts;
+      document.getElementById('statVideo').textContent = result.stats.video_info;
+      
+      // 更新视频
+      const videoUrl = '/uploads/' + result.result_video;
+      resultVideo.src = videoUrl;
+      downloadBtn.href = videoUrl;
+      downloadBtn.download = result.result_video;
+      
+      // 更新状态
+      if (result.stats.total_alerts > 0) {
+        statusBox.className = 'status-card danger';
+        statusBox.innerHTML = '<div class="status-icon">!</div><div class="status-title">检测到异常情况</div><div class="status-info">共检测到 ' + result.stats.total_detections + ' 个目标，其中 ' + result.stats.total_alerts + ' 个需要关注</div>';
+        tipBox.style.display = 'block';
+      } else {
+        statusBox.className = 'status-card normal';
+        statusBox.innerHTML = '<div class="status-icon">✓</div><div class="status-title">检测完成</div><div class="status-info">未检测到异常情况</div>';
+        tipBox.style.display = 'none';
+      }
+      
+      detectBtn.disabled = false;
+    }, 500);
+    
+  } catch (err) {
+    loadingBox.classList.remove('on');
+    progressBox.classList.remove('on');
+    detectBtn.disabled = false;
+    alert('处理失败: ' + err.message);
+    statusBox.className = 'status-card danger';
+    statusBox.innerHTML = '<div class="status-icon">✕</div><div class="status-title">处理失败</div><div class="status-info">' + err.message + '</div>';
+  }
+});
+const detectBtnNode = document.getElementById('detectBtn');
+const detectBtnReplacement = detectBtnNode.cloneNode(true);
+detectBtnNode.parentNode.replaceChild(detectBtnReplacement, detectBtnNode);
+
+detectBtnReplacement.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  detectBtnReplacement.disabled = true;
+  loadingBox.classList.add('on');
+  progressBox.classList.remove('on');
+  resultBox.classList.remove('on');
+  statusBox.className = 'status-card normal';
+  statusBox.innerHTML = '<div class="empty">视频任务已提交，等待处理...</div>';
+
+  const formData = new FormData();
+  formData.append('file', selectedFile);
+  formData.append('skip_frames', document.getElementById('skipFrames').value);
+
+  try {
+    loadingBox.classList.remove('on');
+    progressBox.classList.add('on');
+    progressText.textContent = '任务已提交，等待处理...';
+    progressFill.style.width = '10%';
+
+    const response = await fetch('/api/detect/video', {
+      method: 'POST',
+      body: formData
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || '视频任务提交失败');
+    }
+
+    await pollVideoTaskAsync(result.task_id, detectBtnReplacement);
+  } catch (err) {
+    loadingBox.classList.remove('on');
+    progressBox.classList.remove('on');
+    detectBtnReplacement.disabled = false;
+    alert('处理失败: ' + err.message);
+    statusBox.className = 'status-card danger';
+    statusBox.innerHTML = '<div class="status-icon">×</div><div class="status-title">处理失败</div><div class="status-info">' + err.message + '</div>';
+  }
+});
+
+async function pollVideoTaskAsync(taskId, detectButton) {
+  while (true) {
+    const response = await fetch('/api/tasks/' + taskId);
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || '任务状态查询失败');
+    }
+
+    progressText.textContent = (result.message || '处理中') + ' (' + result.progress + '%)';
+    progressFill.style.width = Math.max(result.progress || 0, 10) + '%';
+
+    if (result.status === 'completed') {
+      progressFill.style.width = '100%';
+      progressText.textContent = '处理完成';
+      progressBox.classList.remove('on');
+      resultBox.classList.add('on');
+
+      document.getElementById('statFrames').textContent = result.stats.total_frames;
+      document.getElementById('statDetected').textContent = result.stats.total_detections;
+      document.getElementById('statAlerts').textContent = result.stats.total_alerts;
+      document.getElementById('statVideo').textContent = result.stats.video_info;
+
+      const videoUrl = '/uploads/' + result.result_video;
+      resultVideo.src = videoUrl;
+      downloadBtn.href = videoUrl;
+      downloadBtn.download = result.result_video.split('/').pop();
+
+      if (result.stats.total_alerts > 0) {
+        statusBox.className = 'status-card danger';
+        statusBox.innerHTML = '<div class="status-icon">!</div><div class="status-title">检测到异常情况</div><div class="status-info">共检测到 ' + result.stats.total_detections + ' 个目标，其中 ' + result.stats.total_alerts + ' 个需要关注</div>';
+        tipBox.style.display = 'block';
+      } else {
+        statusBox.className = 'status-card normal';
+        statusBox.innerHTML = '<div class="status-icon">√</div><div class="status-title">检测完成</div><div class="status-info">未检测到异常情况</div>';
+        tipBox.style.display = 'none';
+      }
+
+      detectButton.disabled = false;
+      return;
+    }
+
+    if (result.status === 'failed') {
+      throw new Error(result.message || '视频处理失败');
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+}
+</script>
+
+</body>
+</html>

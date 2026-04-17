@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据统计 - 垃圾分类系统</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+SC:wght@400;600&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; outline: none; }
+button, input, select, textarea { appearance: none; -webkit-appearance: none; }
+
+body {
+  font-family: 'Noto Sans SC', -apple-system, sans-serif;
+  background: #f5f5f5;
+  color: #333;
+  min-height: 100vh;
+}
+
+.top-bar {
+  background: white;
+  border-bottom: 1px solid #e8e8e8;
+  padding: 0 40px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.site-name {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: #333;
+  text-decoration: none;
+  letter-spacing: 2px;
+}
+.site-name span { color: #4caf50; }
+
+.main-nav { display: flex; gap: 4px; }
+.main-nav a {
+  color: #999;
+  text-decoration: none;
+  padding: 7px 18px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+.main-nav a:hover { background: #f1f8e9; color: #4caf50; }
+.main-nav a.now { background: #4caf50; color: white; }
+
+.page-wrap {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 32px;
+}
+
+.box {
+  background: white;
+  border-radius: 10px;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.05);
+  padding: 24px;
+  margin-bottom: 20px;
+  border: 1px solid #f0f0f0;
+}
+
+.box-title {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #4caf50;
+  display: inline-block;
+  color: #333;
+}
+
+/* 概览四格 */
+.num-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.num-card {
+  text-align: center;
+  padding: 22px 14px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f1f8e9, #f9f9f9);
+  transition: all 0.25s;
+  border: 1px solid #e8f5e9;
+}
+.num-card:hover { transform: translateY(-3px); box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+
+.num-card:nth-child(2) { background: linear-gradient(135deg, #fce4ec, #f9f9f9); border-color: #f8bbd0; }
+.num-card:nth-child(3) { background: linear-gradient(135deg, #e3f2fd, #f9f9f9); border-color: #bbdefb; }
+.num-card:nth-child(4) { background: linear-gradient(135deg, #f3e5f5, #f9f9f9); border-color: #e1bee7; }
+
+.num-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: rgba(76,175,80,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 10px;
+}
+.num-card:nth-child(2) .num-icon { background: rgba(244,67,54,0.1); }
+.num-card:nth-child(3) .num-icon { background: rgba(33,150,243,0.1); }
+.num-card:nth-child(4) .num-icon { background: rgba(156,39,176,0.1); }
+
+.num-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke-width: 2;
+  stroke: #4caf50;
+}
+.num-card:nth-child(2) .num-icon svg { stroke: #f44336; }
+.num-card:nth-child(3) .num-icon svg { stroke: #2196f3; }
+.num-card:nth-child(4) .num-icon svg { stroke: #9c27b0; }
+
+.num-big {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 2rem;
+  font-weight: 600;
+  color: #4caf50;
+}
+.num-card:nth-child(2) .num-big { color: #f44336; }
+.num-card:nth-child(3) .num-big { color: #2196f3; }
+.num-card:nth-child(4) .num-big { color: #9c27b0; }
+
+.num-name { font-size: 0.82rem; color: #999; margin-top: 4px; }
+
+/* 柱状图 */
+.chart-wrap {
+  height: 200px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 12px;
+}
+
+.bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  max-width: 80px;
+}
+
+.bar-num { font-size: 0.78rem; font-weight: 500; color: #555; margin-bottom: 4px; }
+
+.bar-body {
+  width: 32px;
+  border-radius: 5px 5px 0 0;
+  transition: all 0.5s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.bar-body:hover { filter: brightness(1.08); }
+
+.bar-day { font-size: 0.78rem; color: #aaa; margin-top: 8px; }
+
+/* 饼图 */
+.pie-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 52px;
+  flex-wrap: wrap;
+}
+
+.donut {
+  width: 170px;
+  height: 170px;
+  border-radius: 50%;
+  position: relative;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+}
+
+.donut-hole {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 106px;
+  height: 106px;
+  background: white;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.donut-num {
+  font-family: 'Noto Serif SC', serif;
+  font-size: 1.7rem;
+  font-weight: 600;
+  color: #333;
+}
+.donut-tip { font-size: 0.72rem; color: #999; }
+
+.legend-col { display: flex; flex-direction: column; gap: 12px; }
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.88rem;
+}
+
+.legend-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.legend-label { flex: 1; color: #555; }
+.legend-val { font-weight: 500; color: #333; padding-left: 16px; }
+
+/* 24小时分布 */
+.hour-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 80px;
+  padding: 0 4px;
+  border-bottom: 1px solid #f0f0f0;
+  margin-bottom: 8px;
+}
+
+.hour-bar {
+  flex: 1;
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: all 0.4s ease;
+  cursor: pointer;
+  position: relative;
+}
+
+.hour-bar:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.7);
+  color: white;
+  font-size: 0.72rem;
+  padding: 3px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.hour-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 4px;
+  font-size: 0.75rem;
+  color: #bbb;
+}
+
+@media(max-width: 768px) {
+  .num-grid { grid-template-columns: repeat(2, 1fr); }
+  .top-bar { padding: 0 16px; }
+  .page-wrap { padding: 16px; }
+  .pie-wrap { gap: 28px; }
+}
+</style>
+</head>
+<body>
+
+<header class="top-bar">
+  <a class="site-name" href="/">社区<span>垃圾</span>分类</a>
+  <nav class="main-nav">
+    <a href="/">首页</a>
+    <a href="/detection">智慧分类检测</a>
+    <a href="/alerts">记录</a>
+    <a href="/statistics" class="now">统计</a>
+  </nav>
+</header>
+
+<div class="page-wrap">
+
+  <!-- 概览数字 -->
+  <div class="box">
+    <h2 class="box-title">数据概览</h2>
+    <div class="num-grid">
+      <div class="num-card">
+        <div class="num-icon">
+          <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        </div>
+        <div class="num-big" id="num-total">--</div>
+        <div class="num-name">总检测次数</div>
+      </div>
+      <div class="num-card">
+        <div class="num-icon">
+          <svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <div class="num-big" id="num-alert">--</div>
+        <div class="num-name">累计预警次数</div>
+      </div>
+      <div class="num-card">
+        <div class="num-icon">
+          <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </div>
+        <div class="num-big" id="num-today">--</div>
+        <div class="num-name">今日预警</div>
+      </div>
+      <div class="num-card">
+        <div class="num-icon">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="num-big" id="num-records">--</div>
+        <div class="num-name">记录条数</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 近7日趋势 -->
+  <div class="box">
+    <h2 class="box-title">近7日检测趋势（演示数据）</h2>
+    <div class="chart-wrap" id="week-chart"></div>
+  </div>
+
+  <!-- 24小时分布 -->
+  <div class="box">
+    <h2 class="box-title">24小时预警分布</h2>
+    <div class="hour-chart" id="hour-chart"></div>
+    <div class="hour-labels">
+      <span>0时</span><span>6时</span><span>12时</span><span>18时</span><span>23时</span>
+    </div>
+  </div>
+
+  <!-- 类型分布 -->
+  <div class="box">
+    <h2 class="box-title">检测类型分布</h2>
+    <div class="pie-wrap" id="pie-area">
+      <div style="color:#bbb;font-size:0.88rem;">加载中...</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+var barColors = ['#4caf50', '#66bb6a', '#81c784', '#a5d6a7', '#4caf50', '#66bb6a', '#81c784'];
+
+// 近7日演示数据
+var weekData = [
+  { day: '周一', val: 18 },
+  { day: '周二', val: 24 },
+  { day: '周三', val: 15 },
+  { day: '周四', val: 32 },
+  { day: '周五', val: 28 },
+  { day: '周六', val: 21 },
+  { day: '周日', val: 18 }
+];
+
+function buildWeekChart() {
+  var maxVal = Math.max.apply(null, weekData.map(function(d) { return d.val; }));
+  var html = weekData.map(function(d, i) {
+    var h = Math.round((d.val / maxVal) * 160);
+    return '<div class="bar-col">' +
+      '<div class="bar-num">' + d.val + '</div>' +
+      '<div class="bar-body" style="height:' + h + 'px;background:' + barColors[i] + ';"></div>' +
+      '<div class="bar-day">' + d.day + '</div>' +
+    '</div>';
+  }).join('');
+  document.getElementById('week-chart').innerHTML = html;
+}
+
+function buildHourChart(hourData) {
+  var maxVal = Math.max.apply(null, hourData) || 1;
+  var html = hourData.map(function(v, i) {
+    var h = Math.max(Math.round((v / maxVal) * 70), 2);
+    var color = v > 0 ? '#ef5350' : '#e8f5e9';
+    return '<div class="hour-bar" style="height:' + h + 'px;background:' + color + ';" data-tip="' + i + '时: ' + v + '次"></div>';
+  }).join('');
+  document.getElementById('hour-chart').innerHTML = html;
+}
+
+var typeColors = ['#4caf50', '#ff9800', '#f44336', '#2196f3', '#9c27b0'];
+var typeNames  = { 0: '垃圾桶', 1: '垃圾溢出', 2: '散落垃圾', 3: '火焰', 4: '烟雾' };
+
+function buildPie(classStats, total) {
+  if (!classStats || !classStats.length) {
+    document.getElementById('pie-area').innerHTML = '<div style="color:#ccc;font-size:0.88rem;text-align:center;padding:30px;">暂无检测数据</div>';
+    return;
+  }
+
+  var totalDetect = 0;
+  classStats.forEach(function(c) { totalDetect += c.count; });
+  if (totalDetect === 0) totalDetect = 1;
+
+  var deg = 0;
+  var parts = [];
+  classStats.forEach(function(c, i) {
+    var span = (c.count / totalDetect) * 360;
+    parts.push({ start: deg, end: deg + span, color: typeColors[c.class_id % typeColors.length], name: c.class_name, count: c.count, pct: (c.count / totalDetect * 100).toFixed(1) });
+    deg += span;
+  });
+
+  var gradient = parts.map(function(p) {
+    return p.color + ' ' + p.start.toFixed(1) + 'deg ' + p.end.toFixed(1) + 'deg';
+  }).join(', ');
+
+  var legendHtml = parts.map(function(p) {
+    return '<div class="legend-row">' +
+      '<div class="legend-dot" style="background:' + p.color + ';"></div>' +
+      '<span class="legend-label">' + p.name + '</span>' +
+      '<span class="legend-val">' + p.count + ' (' + p.pct + '%)</span>' +
+    '</div>';
+  }).join('');
+
+  document.getElementById('pie-area').innerHTML =
+    '<div class="donut" style="background: conic-gradient(' + gradient + ');">' +
+      '<div class="donut-hole">' +
+        '<div class="donut-num">' + total + '</div>' +
+        '<div class="donut-tip">总检测</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="legend-col">' + legendHtml + '</div>';
+}
+
+function loadStats() {
+  fetch('/api/statistics')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      document.getElementById('num-total').textContent   = data.total_detections || 0;
+      document.getElementById('num-alert').textContent   = data.total_alerts || 0;
+      document.getElementById('num-today').textContent   = data.today_alerts || 0;
+      document.getElementById('num-records').textContent = data.alert_record_count || 0;
+
+      if (data.hourly_alerts) buildHourChart(data.hourly_alerts);
+      if (data.class_stats)   buildPie(data.class_stats, data.total_detections || 0);
+    })
+    .catch(function() {
+      document.getElementById('num-total').textContent = '--';
+    });
+}
+
+buildWeekChart();
+loadStats();
+</script>
+
+</body>
+</html>
