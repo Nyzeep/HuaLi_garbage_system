@@ -191,9 +191,8 @@ start_queue.bat
 1. 检测当前激活的虚拟环境，或扫描项目根目录下是否存在可用虚拟环境
 2. 如果没有找到可用虚拟环境，则自动创建 `.venv`
 3. 如果检测到依赖缺失，则自动执行 `pip install -r requirements.txt`
-4. 检查 Windows 服务 `Redis` 是否在运行，不在则尝试 `net start Redis`
-5. 新开一个窗口启动 Celery Worker
-6. 新开一个窗口启动 FastAPI，并自动打开浏览器
+4. 新开一个窗口启动 Celery Worker
+5. 新开一个窗口启动 FastAPI，并自动打开浏览器
 
 脚本里实际执行的核心命令是：
 
@@ -202,7 +201,9 @@ python -m celery -A app.celery_app worker --loglevel=info --pool=solo
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-如果本机没有安装 Python，或者 Redis 服务没有安装为 `Redis` 这个 Windows 服务名，脚本会提示并停止。
+脚本当前不再强依赖 Redis 服务是否已安装或已启动；即使没有 Redis，项目中的视频任务也会在检测不到可用队列时自动回退到本地线程处理。
+
+提示：Redis 不是项目运行的必要条件，但推荐在正式部署时配合 Celery 一起使用。这样视频任务可以通过 `Celery + Redis` 异步队列更稳定地执行；若未检测到可用 worker，系统会自动回退到本地线程处理模式。
 
 ### 方式二：手动启动
 

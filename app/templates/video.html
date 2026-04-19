@@ -463,7 +463,7 @@ function pollTaskStatus() {
   pollInterval = setInterval(async () => {
     if (!currentTaskId) return;
     try {
-      const resp = await fetch(`/api/tasks/${currentTaskId}`);
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}`);
       const task = await resp.json();
       if (!resp.ok) throw new Error(task.error);
 
@@ -476,7 +476,7 @@ function pollTaskStatus() {
       if (task.status === 'completed') {
         clearInterval(pollInterval);
         pollInterval = null;
-        applyCompletedResult(task.result);
+        applyCompletedResult(task);
         finalizeDetectionUi(true);
       } else if (task.status === 'failed') {
         clearInterval(pollInterval);
@@ -501,6 +501,10 @@ function pollTaskStatus() {
 }
 
 function applyCompletedResult(result) {
+  if (!result) {
+    throw new Error('任务结果为空');
+  }
+
   const stats = result.stats || {};
   document.getElementById('stat-frames').textContent = stats.total_frames || 0;
   document.getElementById('stat-detected').textContent = stats.total_detections || 0;
