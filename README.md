@@ -50,7 +50,7 @@
 - `SQLAlchemy`：SQLite ORM 持久化
 - `Celery + Redis`：视频异步任务调度
 
-### AI 与媒体处理
+### 媒体处理
 
 - `OpenCV`：图像解码、绘框与视频帧处理
 - `NumPy`：张量与数组运算
