@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "Garbage Detection System"
+    app_name: str = "垃圾识别预警系统"
     app_version: str = "2.0.0"
     debug: bool = False
     api_prefix: str = "/api"
