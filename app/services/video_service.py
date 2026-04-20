@@ -1,10 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from pathlib import Path
 
 import cv2
 import imageio
 
 from app.services.detection_service import DetectionService
+from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
 
 
 class VideoProcessingError(RuntimeError):
@@ -18,6 +19,13 @@ class VideoProcessingService:
 
     def __init__(self, detection_service: DetectionService):
         self.detection_service = detection_service
+        # New upgrade pipeline is integrated as a non-breaking sidecar layer.
+        # It consumes existing detections and adds track/alarm metadata.
+        self.upgrade_pipeline = UpgradePipeline(
+            detection_engine=DetectionEngine(detection_service),
+            track_engine=TrackEngine(),
+            alarm_engine=AlarmEngine(min_consecutive_frames=2),
+        )
 
     @staticmethod
     def _bgr_to_rgb(frame):
@@ -101,6 +109,28 @@ class VideoProcessingService:
         ]
         return updated
 
+    def _attach_upgrade_metadata(self, detections: list[dict]) -> tuple[list[dict], int]:
+        """Attach track_id from upgrade pipeline without changing existing alert semantics."""
+        pipe_result = self.upgrade_pipeline.run_detections(detections)
+        tracks = pipe_result.tracks
+        alarms = pipe_result.alarms
+
+        # Map by (class_id, bbox) for deterministic binding in current frame.
+        track_map: dict[tuple[int, tuple[int, int, int, int]], int] = {}
+        for tr in tracks:
+            key = (int(tr.class_id), tuple(int(v) for v in tr.bbox))
+            track_map[key] = int(tr.track_id)
+
+        out: list[dict] = []
+        for det in detections:
+            key = (int(det.get("class_id", -1)), tuple(int(v) for v in det.get("bbox", [])))
+            item = det.copy()
+            if key in track_map:
+                item["track_id"] = track_map[key]
+            out.append(item)
+
+        return out, len(alarms)
+
     def process_video(
         self,
         input_path: Path,
@@ -126,6 +156,7 @@ class VideoProcessingService:
         prev_result = None
         effective_skip = max(skip_frames, 1)
         alert_history: list[dict] = []
+        total_pipeline_alarms = 0
 
         writer = imageio.get_writer(
             str(output_path),
@@ -157,6 +188,9 @@ class VideoProcessingService:
                     current_ts=(frame_count / fps) if fps > 0 else 0.0,
                     alert_history=alert_history,
                 )
+                detections, pipeline_alarm_count = self._attach_upgrade_metadata(detections)
+                total_pipeline_alarms += pipeline_alarm_count
+
                 rendered = self.detection_service.draw_boxes(frame, detections)
                 prev_result = rendered.copy()
 
@@ -173,6 +207,15 @@ class VideoProcessingService:
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.8,
                     (0, 255, 0),
+                    2,
+                )
+                cv2.putText(
+                    rendered,
+                    f"Upgrade alarms: {total_pipeline_alarms}",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 220, 255),
                     2,
                 )
                 writer.append_data(self._bgr_to_rgb(rendered))
