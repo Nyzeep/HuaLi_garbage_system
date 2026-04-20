@@ -1,9 +1,0 @@
-# YOLOv8 烟雾检测数据集（5张新图片）
-# 只包含smoke类别的标注
-
-path: /root/workspace/dataset_smoke_5images_new
-train: images
-val: images
-
-nc: 1
-names: ['smoke']
