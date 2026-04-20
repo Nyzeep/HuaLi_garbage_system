@@ -339,7 +339,7 @@ const recordsPerPage = 10;
 let allRecords = [];
 let totalRecords = 0;
 const imageCache = {};
-let autoRefreshInterval = null;
+let autoRefreshEs = null;
 
 const typeIcons = {
   0: { icon: '🗑️', label: '垃圾桶', isAlert: false },
@@ -403,20 +403,31 @@ function updateStats() {
 }
 
 function startAutoRefresh() {
-  if (autoRefreshInterval) {
-    return;
-  }
-  autoRefreshInterval = setInterval(() => {
-    loadRecords();
-  }, 10000);
+  stopAutoRefresh();
+  const params = new URLSearchParams({
+    page: String(currentPage),
+    per_page: String(recordsPerPage),
+    status: currentFilter,
+  });
+  autoRefreshEs = new EventSource(`/api/alerts/stream?${params}`);
+  autoRefreshEs.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    totalRecords = Number(data.total || 0);
+    allRecords = Array.isArray(data.records) ? data.records : [];
+    updateStats();
+    renderRecords();
+  };
+  autoRefreshEs.onerror = () => {
+    stopAutoRefresh();
+  };
 }
 
 function stopAutoRefresh() {
-  if (!autoRefreshInterval) {
-    return;
+  if (autoRefreshEs) {
+    autoRefreshEs.close();
+    autoRefreshEs = null;
   }
-  clearInterval(autoRefreshInterval);
-  autoRefreshInterval = null;
 }
 
 function changeFilter(filter) {
@@ -429,6 +440,7 @@ function changeFilter(filter) {
   });
 
   loadRecords();
+  startAutoRefresh();
 }
 
 function showLoadError() {

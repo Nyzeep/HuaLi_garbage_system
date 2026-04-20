@@ -78,6 +78,13 @@ class StatisticsResponse(BaseModel):
     alert_record_count: int
 
 
+class RustStatus(BaseModel):
+    available: bool
+    healthy: bool
+    error: str | None = None
+    latency_ms: float | None = None
+
+
 class SystemStatusResponse(BaseModel):
     model_loaded: bool
     garbage_model: bool
@@ -88,6 +95,7 @@ class SystemStatusResponse(BaseModel):
     class_count: int
     version: str
     name: str
+    rust: RustStatus
 
 
 class VideoTaskCreateResponse(BaseModel):

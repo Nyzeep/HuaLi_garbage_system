@@ -10,9 +10,8 @@ from app.bootstrap import bootstrap_application
 from app.celery_app import celery_app
 from app.config import get_settings
 from app.database import SessionLocal
-from app.services.detection_service import DetectionService
+from app.dependencies import get_video_processing_service
 from app.services.record_service import RecordService
-from app.services.video_service import VideoProcessingService
 
 
 logger = get_task_logger(__name__)
@@ -28,8 +27,7 @@ def run_video_task(
     bootstrap_application()
     db = SessionLocal()
     record_service = RecordService(settings.uploads_dir)
-    detection_service = DetectionService(settings=settings)
-    video_service = VideoProcessingService(detection_service=detection_service)
+    video_service = get_video_processing_service()
 
     input_file = Path(input_path)
     output_dir = settings.uploads_dir / "videos"

@@ -1,11 +1,17 @@
 ﻿from __future__ import annotations
+import logging
+import time
 from pathlib import Path
 
 import cv2
 import imageio
 
+from app.infrastructure.ml.rust_bridge import RustBridge
 from app.services.detection_service import DetectionService
 from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
+
+
+logger = logging.getLogger(__name__)
 
 
 class VideoProcessingError(RuntimeError):
@@ -16,9 +22,16 @@ class VideoProcessingService:
     VIDEO_IOU_MATCH_THRESHOLD = 0.4
     VIDEO_GARBAGE_COOLDOWN_SECONDS = 3.0  # overflow/garbage
     VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS = 1.0  # fire/smoke
+    VIDEO_ENCODER_CANDIDATES = (
+        "libx264",
+        "h264_nvenc",
+        "h264_qsv",
+        "h264_amf",
+    )
 
-    def __init__(self, detection_service: DetectionService):
+    def __init__(self, detection_service: DetectionService, rust_bridge: RustBridge | None = None):
         self.detection_service = detection_service
+        self.rust_bridge = rust_bridge or RustBridge()
         # New upgrade pipeline is integrated as a non-breaking sidecar layer.
         # It consumes existing detections and adds track/alarm metadata.
         self.upgrade_pipeline = UpgradePipeline(
@@ -51,6 +64,10 @@ class VideoProcessingService:
             return self.VIDEO_GARBAGE_COOLDOWN_SECONDS
         return 0.0
 
+    # Class groups for per-cooldown Rust deduplication
+    _FIRE_SMOKE_CLASS_IDS: frozenset[int] = frozenset({3, 4})
+    _GARBAGE_CLASS_IDS: frozenset[int] = frozenset({0, 1, 2})
+
     def _apply_video_alert_cooldown(
         self,
         detections: list[dict],
@@ -61,7 +78,124 @@ class VideoProcessingService:
         Video-only cooldown:
         - overflow/garbage: same object won't re-alert within 3s
         - fire/smoke: same object won't re-alert within 1s
+
+        When the Rust binary is available, deduplication is performed as a
+        single batch call per cooldown group.  Falls back to the pure-Python
+        implementation transparently.
         """
+        started_at = time.perf_counter()
+        result = self._apply_video_alert_cooldown_rust(detections, current_ts, alert_history)
+        if result is not None:
+            logger.info(
+                "video alert cooldown completed path=rust detections=%d duration_ms=%.2f",
+                len(detections),
+                (time.perf_counter() - started_at) * 1000,
+            )
+            return result
+        result = self._apply_video_alert_cooldown_python(detections, current_ts, alert_history)
+        logger.warning(
+            "video alert cooldown completed path=python-fallback detections=%d duration_ms=%.2f",
+            len(detections),
+            (time.perf_counter() - started_at) * 1000,
+        )
+        return result
+
+    def _apply_video_alert_cooldown_rust(
+        self,
+        detections: list[dict],
+        current_ts: float,
+        alert_history: list[dict],
+    ) -> list[dict] | None:
+        """
+        Rust-accelerated path.  Converts alert history and new alert detections
+        to TrackEvents and calls Rust dedupe_track_events per cooldown group.
+        Returns None to signal that the caller should fall back to Python.
+        """
+        current_ts_ms = int(current_ts * 1000)
+
+        alert_indices = [
+            i for i, d in enumerate(detections)
+            if d.get("alert", False) and self._cooldown_seconds_for_class(int(d.get("class_id", -1))) > 0
+        ]
+        if not alert_indices:
+            return detections
+
+        # Convert history to ms-timestamped events.
+        def hist_as_events(class_ids: frozenset[int]) -> list[dict]:
+            return [
+                {"class_id": r["class_id"], "bbox": r["bbox"], "timestamp_ms": int(r["timestamp"] * 1000)}
+                for r in alert_history
+                if r["class_id"] in class_ids
+            ]
+
+        def new_as_events(class_ids: frozenset[int]) -> list[tuple[int, dict]]:
+            return [
+                (i, {"class_id": int(detections[i].get("class_id", -1)),
+                     "bbox": detections[i]["bbox"],
+                     "timestamp_ms": current_ts_ms})
+                for i in alert_indices
+                if int(detections[i].get("class_id", -1)) in class_ids
+            ]
+
+        # Per-group deduplication with the correct cooldown window.
+        suppressed_indices: set[int] = set()
+        new_history: list[dict] = []
+
+        for class_ids, cooldown_s in (
+            (self._FIRE_SMOKE_CLASS_IDS, self.VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS),
+            (self._GARBAGE_CLASS_IDS, self.VIDEO_GARBAGE_COOLDOWN_SECONDS),
+        ):
+            group_new = new_as_events(class_ids)
+            if not group_new:
+                # Preserve unaffected history for this group.
+                new_history.extend(hist_as_events(class_ids))
+                continue
+
+            group_hist = hist_as_events(class_ids)
+            cooldown_ms = int(cooldown_s * 1000)
+            all_events = group_hist + [e for _, e in group_new]
+
+            kept = self.rust_bridge.dedupe_events(all_events, cooldown_ms, self.VIDEO_IOU_MATCH_THRESHOLD)
+            if kept is None:
+                return None  # signal fallback
+
+            # Surviving events whose timestamp matches current frame are the non-suppressed new alerts.
+            surviving_keys: set[tuple[int, tuple]] = {
+                (e["class_id"], tuple(e["bbox"]))
+                for e in kept
+                if e["timestamp_ms"] == current_ts_ms
+            }
+            for idx, evt in group_new:
+                key = (evt["class_id"], tuple(evt["bbox"]))
+                if key not in surviving_keys:
+                    suppressed_indices.add(idx)
+
+            new_history.extend(kept)
+
+        # Rebuild history from Rust-deduped result.
+        alert_history[:] = [
+            {"class_id": e["class_id"], "bbox": e["bbox"], "timestamp": e["timestamp_ms"] / 1000.0}
+            for e in new_history
+        ]
+
+        # Apply suppression to detections list.
+        result = []
+        for i, det in enumerate(detections):
+            if i in suppressed_indices:
+                item = det.copy()
+                item["alert"] = False
+                result.append(item)
+            else:
+                result.append(det)
+        return result
+
+    def _apply_video_alert_cooldown_python(
+        self,
+        detections: list[dict],
+        current_ts: float,
+        alert_history: list[dict],
+    ) -> list[dict]:
+        """Pure-Python fallback — original O(n × history) implementation."""
         updated = []
 
         for det in detections:
@@ -90,16 +224,9 @@ class VideoProcessingService:
             if has_recent_same_object:
                 item["alert"] = False
             else:
-                alert_history.append(
-                    {
-                        "class_id": class_id,
-                        "bbox": bbox,
-                        "timestamp": current_ts,
-                    }
-                )
+                alert_history.append({"class_id": class_id, "bbox": bbox, "timestamp": current_ts})
             updated.append(item)
 
-        # Keep alert history bounded to reduce growth.
         max_keep_window = max(
             self.VIDEO_GARBAGE_COOLDOWN_SECONDS,
             self.VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS,
@@ -108,6 +235,63 @@ class VideoProcessingService:
             rec for rec in alert_history if current_ts - rec["timestamp"] <= max_keep_window
         ]
         return updated
+
+    @staticmethod
+    def _find_ffmpeg_output_path(error: Exception) -> Path | None:
+        message = str(error)
+        marker = "ffmpeg error: [Errno 2] No such file or directory: '"
+        if marker not in message:
+            return None
+        tail = message.split(marker, 1)[1]
+        candidate = tail.split("'", 1)[0]
+        return Path(candidate) if candidate else None
+
+    @staticmethod
+    def _build_video_writer(output_path: Path, fps: float):
+        for codec in VideoProcessingService.VIDEO_ENCODER_CANDIDATES:
+            try:
+                writer = imageio.get_writer(
+                    str(output_path),
+                    fps=fps,
+                    codec=codec,
+                    pixelformat="yuv420p",
+                )
+                return writer, codec
+            except Exception:
+                continue
+        writer = imageio.get_writer(
+            str(output_path),
+            fps=fps,
+            codec="libx264",
+            pixelformat="yuv420p",
+            quality=8,
+        )
+        return writer, "libx264"
+
+    def _append_frame_with_encoder_fallback(
+        self,
+        writer,
+        frame_rgb,
+        output_path: Path,
+        fps: float,
+    ):
+        try:
+            writer.append_data(frame_rgb)
+            return writer, output_path
+        except Exception as exc:
+            fallback_path = self._find_ffmpeg_output_path(exc)
+            if fallback_path is None:
+                raise
+            writer.close()
+            fallback_writer = imageio.get_writer(
+                str(fallback_path),
+                fps=fps,
+                codec="libx264",
+                pixelformat="yuv420p",
+                quality=8,
+            )
+            fallback_writer.append_data(frame_rgb)
+            return fallback_writer, fallback_path
 
     def _attach_upgrade_metadata(self, detections: list[dict]) -> tuple[list[dict], int]:
         """Attach track_id from upgrade pipeline without changing existing alert semantics."""
@@ -138,6 +322,13 @@ class VideoProcessingService:
         skip_frames: int,
         progress_callback=None,
     ) -> dict:
+        started_at = time.perf_counter()
+        logger.info(
+            "video processing started input=%s output=%s skip_frames=%d",
+            input_path,
+            output_path,
+            skip_frames,
+        )
         cap = cv2.VideoCapture(str(input_path))
         if not cap.isOpened():
             raise VideoProcessingError("无法读取视频文件")
@@ -158,13 +349,8 @@ class VideoProcessingService:
         alert_history: list[dict] = []
         total_pipeline_alarms = 0
 
-        writer = imageio.get_writer(
-            str(output_path),
-            fps=fps,
-            codec="libx264",
-            pixelformat="yuv420p",
-            quality=8,
-        )
+        writer, encoder_used = self._build_video_writer(output_path, fps)
+        current_output_path = output_path
 
         try:
             while True:
@@ -173,16 +359,21 @@ class VideoProcessingService:
                     break
 
                 frame_count += 1
-                # Detect on frame 1, 1+skip, 1+2*skip ...
-                # When skip_frames=1, every frame is processed.
                 if (frame_count - 1) % effective_skip != 0:
                     frame_to_write = prev_result if prev_result is not None else frame
-                    writer.append_data(self._bgr_to_rgb(frame_to_write))
+                    frame_rgb = self._bgr_to_rgb(frame_to_write)
+                    writer, current_output_path = self._append_frame_with_encoder_fallback(
+                        writer,
+                        frame_rgb,
+                        current_output_path,
+                        fps,
+                    )
                     if progress_callback and total_frames:
                         progress_callback(frame_count, total_frames)
                     continue
 
-                detections = self.detection_service.detect(frame)
+                frame_started_at = time.perf_counter()
+                detections = self.detection_service.detect_raw(frame)
                 detections = self._apply_video_alert_cooldown(
                     detections=detections,
                     current_ts=(frame_count / fps) if fps > 0 else 0.0,
@@ -218,7 +409,21 @@ class VideoProcessingService:
                     (0, 220, 255),
                     2,
                 )
-                writer.append_data(self._bgr_to_rgb(rendered))
+                frame_rgb = self._bgr_to_rgb(rendered)
+                writer, current_output_path = self._append_frame_with_encoder_fallback(
+                    writer,
+                    frame_rgb,
+                    current_output_path,
+                    fps,
+                )
+                logger.info(
+                    "video frame processed frame=%d/%d detections=%d alerts=%d duration_ms=%.2f",
+                    frame_count,
+                    total_frames,
+                    len(detections),
+                    frame_alerts,
+                    (time.perf_counter() - frame_started_at) * 1000,
+                )
 
                 if progress_callback and total_frames:
                     progress_callback(frame_count, total_frames)
@@ -226,6 +431,23 @@ class VideoProcessingService:
             writer.close()
             cap.release()
 
+        if encoder_used != "libx264" and current_output_path != output_path:
+            try:
+                if output_path.exists():
+                    output_path.unlink()
+                current_output_path.replace(output_path)
+            except Exception:
+                pass
+
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "video processing completed frames=%d detected_frames=%d total_detections=%d total_alerts=%d duration_ms=%.2f",
+            frame_count,
+            alert_frames,
+            total_detections,
+            total_alerts,
+            duration_ms,
+        )
         return {
             "total_frames": frame_count,
             "detected_frames": alert_frames,

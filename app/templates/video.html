@@ -368,7 +368,7 @@ let selectedVideo = null;
 let isDetecting = false;
 let startTime = null;
 let currentTaskId = null;
-let pollInterval = null;
+let activeEventSource = null;
 
 function handleVideoSelect(event) {
   const file = event.target.files[0];
@@ -443,7 +443,9 @@ async function startDetection() {
       throw new Error(data.error || '提交失败');
     }
     currentTaskId = data.task_id;
-    pollTaskStatus();
+    const completedTask = await watchTaskStatus(data.task_id);
+    applyCompletedResult(completedTask);
+    finalizeDetectionUi(true);
   } catch (error) {
     console.error('提交视频失败:', error);
     addResult({
@@ -458,46 +460,47 @@ async function startDetection() {
   }
 }
 
-function pollTaskStatus() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(async () => {
-    if (!currentTaskId) return;
-    try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}`);
-      const task = await resp.json();
-      if (!resp.ok) throw new Error(task.error);
+function watchTaskStatus(taskId) {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
+    activeEventSource = es;
 
-      // 更新进度
+    es.onmessage = (event) => {
+      let task;
+      try { task = JSON.parse(event.data); } catch { return; }
+
       document.getElementById('progress-percent').textContent = `${task.progress}%`;
       document.getElementById('progress-bar').style.width = `${task.progress}%`;
       document.getElementById('progress-text').textContent = task.message;
       document.getElementById('processing-text').textContent = task.message;
 
-      if (task.status === 'completed') {
-        clearInterval(pollInterval);
-        pollInterval = null;
-        applyCompletedResult(task);
-        finalizeDetectionUi(true);
-      } else if (task.status === 'failed') {
-        clearInterval(pollInterval);
-        pollInterval = null;
-        throw new Error(task.message);
+      if (startTime) {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('stat-duration').textContent = `${elapsed}s`;
       }
-    } catch (error) {
-      console.error('轮询失败:', error);
-      clearInterval(pollInterval);
-      pollInterval = null;
-      addResult({
-        class_id: 'warning',
-        class_name: `处理失败: ${error.message}`,
-        confidence: 1,
-        is_alert: true,
-        frame: '-'
-      });
-      alert(`处理失败: ${error.message}`);
-      finalizeDetectionUi();
-    }
-  }, 1500);
+
+      if (task.status === 'completed') {
+        es.close();
+        activeEventSource = null;
+        resolve(task);
+      } else if (task.status === 'failed') {
+        es.close();
+        activeEventSource = null;
+        reject(new Error(task.message || '视频处理失败'));
+      }
+    };
+
+    es.addEventListener('error', (event) => {
+      es.close();
+      activeEventSource = null;
+      if (event.data) {
+        try { reject(new Error(JSON.parse(event.data).message || '任务状态查询失败')); }
+        catch { reject(new Error('任务状态查询失败')); }
+      } else {
+        reject(new Error('SSE 连接断开'));
+      }
+    });
+  });
 }
 
 function applyCompletedResult(result) {
@@ -533,8 +536,7 @@ function applyCompletedResult(result) {
 function stopDetection() {
   if (!isDetecting) return;
   isDetecting = false;
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = null;
+  if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
   finalizeDetectionUi();
   document.getElementById('processing-text').textContent = '已停止检测';
 }
@@ -542,8 +544,7 @@ function stopDetection() {
 function finalizeDetectionUi(completed = false) {
   isDetecting = false;
   currentTaskId = null;
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = null;
+  if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
 
   document.getElementById('btn-start').classList.remove('hidden');
   document.getElementById('btn-stop').classList.add('hidden');
@@ -564,8 +565,7 @@ function resetStats() {
   document.getElementById('results-list').innerHTML = '';
   document.getElementById('results-empty').classList.remove('hidden');
   document.getElementById('results-list').classList.add('hidden');
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = null;
+  if (activeEventSource) { activeEventSource.close(); activeEventSource = null; }
   currentTaskId = null;
 }
 

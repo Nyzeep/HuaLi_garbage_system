@@ -351,7 +351,7 @@ const typeConfig = {
   smoke: { icon: '💨', label: '烟雾', color: '#8b5cf6', alert: true }
 };
 
-let autoRefreshInterval = null;
+let autoRefreshEs = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   loadStatistics();
@@ -363,18 +363,23 @@ window.addEventListener('beforeunload', () => {
 });
 
 function startAutoRefresh() {
-  if (autoRefreshInterval) {
-    return;
-  }
-  autoRefreshInterval = setInterval(loadStatistics, 10000);
+  if (autoRefreshEs) return;
+  autoRefreshEs = new EventSource('/api/statistics/stream');
+  autoRefreshEs.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    updateUI(data);
+  };
+  autoRefreshEs.onerror = () => {
+    stopAutoRefresh();
+  };
 }
 
 function stopAutoRefresh() {
-  if (!autoRefreshInterval) {
-    return;
+  if (autoRefreshEs) {
+    autoRefreshEs.close();
+    autoRefreshEs = null;
   }
-  clearInterval(autoRefreshInterval);
-  autoRefreshInterval = null;
 }
 
 async function loadStatistics() {

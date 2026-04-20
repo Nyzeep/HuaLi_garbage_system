@@ -35,9 +35,21 @@ def base64_to_frame(b64_str: str) -> np.ndarray:
 def save_image(image: np.ndarray, output_dir: Path, suffix: str = ".jpg") -> Path:
     ensure_dir(output_dir)
     file_path = output_dir / f"{datetime.utcnow():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:8]}{suffix}"
-    ok = cv2.imwrite(str(file_path), image)
+
+    ext = suffix.lower()
+    if not ext.startswith("."):
+        ext = f".{ext}"
+
+    ok, buf = cv2.imencode(ext, image)
     if not ok:
-        raise ValueError(f"failed to save image to {file_path}")
+        raise ValueError(f"failed to encode image for {file_path}")
+
+    try:
+        with file_path.open("wb") as f:
+            f.write(buf.tobytes())
+    except OSError as exc:
+        raise ValueError(f"failed to save image to {file_path}") from exc
+
     return file_path
 
 

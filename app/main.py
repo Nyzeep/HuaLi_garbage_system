@@ -13,6 +13,8 @@ from app.api.pages import build_pages_router
 from app.api.routes import build_api_router
 from app.bootstrap import bootstrap_application
 from app.config import get_settings
+from app.core.exceptions import AppError
+from app.core.responses import error_response
 
 
 settings = get_settings()
@@ -28,13 +30,30 @@ def create_app() -> FastAPI:
         debug=settings.debug,
     )
 
+    @app.exception_handler(AppError)
+    async def app_error_handler(_, exc: AppError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_response(message=exc.message, code=exc.code),
+        )
+
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(_, exc: StarletteHTTPException) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_response(message=str(exc.detail), code="HTTP_ERROR"),
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_, exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(status_code=422, content={"error": "请求参数校验失败", "detail": exc.errors()})
+        return JSONResponse(
+            status_code=422,
+            content=error_response(
+                message="请求参数校验失败",
+                code="VALIDATION_ERROR",
+                data=exc.errors(),
+            ),
+        )
 
     templates = Jinja2Templates(directory=str(settings.templates_dir))
 

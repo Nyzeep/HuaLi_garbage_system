@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     fire_onnx_model: Path = BASE_DIR / "models" / "only_fire.onnx"
     smoke_onnx_model: Path = BASE_DIR / "models" / "fire_smoke.onnx"
 
+    rust_service_url: str = "http://127.0.0.1:50051"
+    rust_service_timeout_seconds: float = 2.0
+    rust_prefer_pyo3: bool = True
+
     default_conf_threshold: float = 0.5
     garbage_bin_conf_threshold: float = 0.4
     default_iou_threshold: float = 0.3

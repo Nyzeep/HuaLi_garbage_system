@@ -562,9 +562,11 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
 let selectedFile = null;
 let cameraStream = null;
 let autoDetectInterval = null;
+let cameraWs = null;
 let selectedVideo = null;
 let isDetectingVideo = false;
 let videoStartTime = null;
+let activeVideoEventSource = null;
 
 const classIconMap = {
   0: '🗑️',
@@ -852,29 +854,41 @@ function startAutoDetect() {
     alert('请先启动摄像头');
     return;
   }
+  if (cameraWs && cameraWs.readyState === WebSocket.OPEN) return;
 
-  if (autoDetectInterval) {
-    return;
-  }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  cameraWs = new WebSocket(`${proto}://${location.host}/api/ws/camera`);
 
-  autoDetectInterval = setInterval(() => {
-    captureAndDetect();
-  }, 1000);
+  cameraWs.onopen = () => {
+    autoDetectInterval = setInterval(captureAndDetect, 1000);
+  };
+
+  cameraWs.onmessage = (event) => {
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    if (data.error) { console.error('摄像头检测失败:', data.error); return; }
+    setLoading(false);
+    displayResults(data);
+  };
+
+  cameraWs.onerror = () => {
+    console.error('WebSocket 连接失败');
+    stopAutoDetect();
+  };
+
+  cameraWs.onclose = () => {
+    cameraWs = null;
+    if (autoDetectInterval) { clearInterval(autoDetectInterval); autoDetectInterval = null; }
+  };
 }
 
 function stopAutoDetect() {
-  if (!autoDetectInterval) {
-    return;
-  }
-  clearInterval(autoDetectInterval);
-  autoDetectInterval = null;
+  if (autoDetectInterval) { clearInterval(autoDetectInterval); autoDetectInterval = null; }
+  if (cameraWs) { cameraWs.close(); cameraWs = null; }
 }
 
 function captureAndDetect() {
-  if (!cameraStream) {
-    alert('请先启动摄像头');
-    return;
-  }
+  if (!cameraStream || !cameraWs || cameraWs.readyState !== WebSocket.OPEN) return;
 
   const video = document.getElementById('camera-video');
   const canvas = document.getElementById('camera-canvas');
@@ -883,8 +897,8 @@ function captureAndDetect() {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0);
 
-  const imageData = canvas.toDataURL('image/jpeg', 0.85);
-  detectBase64(imageData);
+  setLoading(true);
+  cameraWs.send(JSON.stringify({ image: canvas.toDataURL('image/jpeg', 0.85) }));
 }
 
 function handleVideoSelect(event) {
@@ -965,7 +979,9 @@ async function startVideoDetection() {
       throw new Error(submitData.error || submitData.message || '视频任务提交失败');
     }
 
-    await pollVideoTaskStatus(submitData.task_id);
+    const completedTask = await watchVideoTaskStatus(submitData.task_id);
+    applyCompletedVideoResult(completedTask);
+    finalizeVideoDetectionUi(true);
   } catch (error) {
     console.error('视频检测失败:', error);
     addVideoResult({
@@ -980,36 +996,48 @@ async function startVideoDetection() {
   }
 }
 
-async function pollVideoTaskStatus(taskId) {
-  while (isDetectingVideo) {
-    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.error || result.message || '任务状态查询失败');
-    }
+function watchVideoTaskStatus(taskId) {
+  return new Promise((resolve, reject) => {
+    const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
+    activeVideoEventSource = es;
 
-    const progress = Math.max(0, Math.min(100, Number(result.progress || 0)));
-    document.getElementById('video-progress-percent').textContent = `${progress}%`;
-    document.getElementById('video-progress-bar').style.width = `${progress}%`;
-    document.getElementById('video-progress-text').textContent = result.message || `处理中 ${progress}%`;
-    document.getElementById('video-processing-text').textContent = result.message || '处理中...';
+    es.onmessage = (event) => {
+      let result;
+      try { result = JSON.parse(event.data); } catch { return; }
 
-    if (videoStartTime) {
-      const elapsed = Math.floor((Date.now() - videoStartTime) / 1000);
-      document.getElementById('video-stat-duration').textContent = `${elapsed}s`;
-    }
+      const progress = Math.max(0, Math.min(100, Number(result.progress || 0)));
+      document.getElementById('video-progress-percent').textContent = `${progress}%`;
+      document.getElementById('video-progress-bar').style.width = `${progress}%`;
+      document.getElementById('video-progress-text').textContent = result.message || `处理中 ${progress}%`;
+      document.getElementById('video-processing-text').textContent = result.message || '处理中...';
 
-    if (result.status === 'completed') {
-      applyCompletedVideoResult(result);
-      finalizeVideoDetectionUi(true);
-      return;
-    }
-    if (result.status === 'failed') {
-      throw new Error(result.message || '视频处理失败');
-    }
+      if (videoStartTime) {
+        const elapsed = Math.floor((Date.now() - videoStartTime) / 1000);
+        document.getElementById('video-stat-duration').textContent = `${elapsed}s`;
+      }
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-  }
+      if (result.status === 'completed') {
+        es.close();
+        activeVideoEventSource = null;
+        resolve(result);
+      } else if (result.status === 'failed') {
+        es.close();
+        activeVideoEventSource = null;
+        reject(new Error(result.message || '视频处理失败'));
+      }
+    };
+
+    es.addEventListener('error', (event) => {
+      es.close();
+      activeVideoEventSource = null;
+      if (event.data) {
+        try { reject(new Error(JSON.parse(event.data).message || '任务状态查询失败')); }
+        catch { reject(new Error('任务状态查询失败')); }
+      } else {
+        reject(new Error('SSE 连接断开'));
+      }
+    });
+  });
 }
 
 function applyCompletedVideoResult(result) {
@@ -1048,12 +1076,14 @@ function stopVideoDetection() {
     return;
   }
   isDetectingVideo = false;
+  if (activeVideoEventSource) { activeVideoEventSource.close(); activeVideoEventSource = null; }
   finalizeVideoDetectionUi();
-  document.getElementById('video-processing-text').textContent = '已停止前端轮询，后台任务可能仍在继续';
+  document.getElementById('video-processing-text').textContent = '已停止，后台任务可能仍在继续';
 }
 
 function finalizeVideoDetectionUi(completed = false) {
   isDetectingVideo = false;
+  if (activeVideoEventSource) { activeVideoEventSource.close(); activeVideoEventSource = null; }
 
   const video = document.getElementById('video-player');
   if (!completed) {
