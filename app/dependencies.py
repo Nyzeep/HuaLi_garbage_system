@@ -40,13 +40,8 @@ def _build_backend(model_key, onnx_path, pt_path):
 
 @lru_cache
 def get_rust_bridge() -> RustBridge:
-    """Singleton RustBridge — prefers PyO3 in-process calls, falls back to HTTP."""
-    settings = get_settings()
-    return RustBridge(
-        base_url=settings.rust_service_url,
-        timeout_seconds=settings.rust_service_timeout_seconds,
-        prefer_pyo3=settings.rust_prefer_pyo3,
-    )
+    """Singleton RustBridge — always uses PyO3 in-process calls."""
+    return RustBridge()
 
 
 @lru_cache

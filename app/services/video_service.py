@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import imageio
 
+from app.core.geometry import compute_iou
 from app.infrastructure.ml.rust_bridge import RustBridge
 from app.services.detection_service import DetectionService
 from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
@@ -44,18 +45,6 @@ class VideoProcessingService:
     def _bgr_to_rgb(frame):
         # OpenCV uses BGR, while imageio/ffmpeg writer expects RGB arrays.
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-    @staticmethod
-    def _compute_iou(box1: list[int], box2: list[int]) -> float:
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-        inter = max(0, x2 - x1) * max(0, y2 - y1)
-        area1 = max(0, box1[2] - box1[0]) * max(0, box1[3] - box1[1])
-        area2 = max(0, box2[2] - box2[0]) * max(0, box2[3] - box2[1])
-        union = area1 + area2 - inter
-        return inter / union if union > 0 else 0.0
 
     def _cooldown_seconds_for_class(self, class_id: int) -> float:
         if class_id in (3, 4):  # fire / smoke
@@ -217,7 +206,7 @@ class VideoProcessingService:
                     continue
                 if current_ts - rec["timestamp"] > cooldown:
                     continue
-                if self._compute_iou(bbox, rec["bbox"]) >= self.VIDEO_IOU_MATCH_THRESHOLD:
+                if compute_iou(bbox, rec["bbox"]) >= self.VIDEO_IOU_MATCH_THRESHOLD:
                     has_recent_same_object = True
                     break
 

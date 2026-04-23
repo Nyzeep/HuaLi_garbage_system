@@ -46,6 +46,55 @@ def build_registry(*bundles: tuple[str, DummyBackend | None, dict[int, int] | No
     return registry
 
 
+def test_registry_get_returns_bundle_for_existing_key():
+    backend = DummyBackend([])
+    registry = build_registry(("garbage", backend, {0: 2}))
+
+    bundle = registry.get("garbage")
+
+    assert bundle is not None
+    assert bundle.descriptor.key == "garbage"
+    assert bundle.backend is backend
+
+
+def test_registry_get_returns_none_for_missing_key():
+    registry = ModelRegistry()
+
+    assert registry.get("missing") is None
+
+
+def test_registry_get_supports_empty_key():
+    backend = DummyBackend([])
+    registry = build_registry(("", backend, {0: 0}))
+
+    bundle = registry.get("")
+
+    assert bundle is not None
+    assert bundle.descriptor.key == ""
+
+
+def test_registry_get_uses_latest_bundle_on_duplicate_key():
+    old_backend = DummyBackend([], loaded=True)
+    new_backend = DummyBackend([], loaded=False)
+    registry = ModelRegistry()
+    registry.register(
+        ModelDescriptor(key="garbage", onnx_path=__file__, pt_path=__file__, class_mapping={0: 0}),
+        old_backend,
+    )
+    registry.register(
+        ModelDescriptor(key="garbage", onnx_path=__file__, pt_path=__file__, class_mapping={0: 2}),
+        new_backend,
+    )
+
+    bundle = registry.get("garbage")
+
+    assert bundle is not None
+    assert bundle.backend is new_backend
+    assert bundle.descriptor.class_mapping == {0: 2}
+    assert len(registry.items()) == 1
+    assert registry.loaded_map() == {"garbage": False}
+
+
 def test_detect_returns_empty_when_no_loaded_models():
     service = InferenceService(ModelRegistry())
 

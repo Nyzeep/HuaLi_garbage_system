@@ -40,8 +40,16 @@ class DummyDetectionService:
 
     def build_response(self, image: np.ndarray, detections: list[dict], with_image: bool = True) -> dict:
         self.build_calls.append((image, detections, with_image))
+        alert_count = sum(1 for item in detections if item.get("alert", False))
         return {
-            "scene": {"status": "mock-scene"},
+            "scene": {
+                "status": "mock-scene",
+                "alert_count": alert_count,
+                "alert_types": [item.get("class_name", "") for item in detections if item.get("alert", False)],
+                "normal_count": len(detections) - alert_count,
+                "total": len(detections),
+                "timestamp": "2026-01-01 00:00:00",
+            },
             "detections": detections,
             "result_image": "base64-image" if with_image else None,
         }
@@ -143,13 +151,16 @@ def test_detect_image_endpoint_returns_detections_and_records_alert(monkeypatch)
     dummy_record_service = DummyRecordService()
     client = make_client(monkeypatch, dummy_detection_service, dummy_record_service)
 
-    files = {"file": ("test.png", io.BytesIO(b"fake-image-bytes"), "image/png")}
+    image = np.zeros((12, 12, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    files = {"file": ("test.png", io.BytesIO(encoded.tobytes()), "image/png")}
     response = client.post("/api/detect/image", files=files)
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["success"] is True
-    assert payload["scene"] == {"status": "mock-scene"}
+    assert payload["scene"]["status"] == "mock-scene"
     assert payload["detections"][0]["source"] == "fire"
     assert payload["result_image"] == "base64-image"
     assert len(dummy_detection_service.detect_calls) == 1

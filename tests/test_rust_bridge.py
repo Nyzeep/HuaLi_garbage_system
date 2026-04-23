@@ -1,262 +1,192 @@
 from __future__ import annotations
 
-import json
-from io import BytesIO
-from urllib import error
 from unittest.mock import patch
 
-import pytest
-
+from app.infrastructure.ml import rust_bridge as rust_bridge_module
 from app.infrastructure.ml.rust_bridge import RustBridge
 
 
-class FakeResponse:
-    def __init__(self, payload: dict | str | bytes) -> None:
-        if isinstance(payload, dict):
-            payload = json.dumps(payload)
-        if isinstance(payload, str):
-            payload = payload.encode("utf-8")
-        self._payload = payload
-
-    def read(self) -> bytes:
-        return self._payload
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
+def test_mode_is_pyo3_and_available_true():
+    bridge = RustBridge()
+    if rust_bridge_module._rust_native is None:
+        assert bridge.mode == "http"
+    else:
+        assert bridge.mode == "pyo3"
+    assert bridge.available() is True
 
 
-class UrlopenRecorder:
-    def __init__(self, response_payload: dict | str | bytes) -> None:
-        self.response_payload = response_payload
-        self.calls: list[dict] = []
-
-    def __call__(self, req, timeout):
-        self.calls.append(
-            {
-                "url": req.full_url,
-                "method": req.get_method(),
-                "headers": dict(req.header_items()),
-                "body": json.loads(req.data.decode("utf-8")) if req.data else None,
-                "timeout": timeout,
-            }
-        )
-        return FakeResponse(self.response_payload)
+def test_pyo3_probe_failure_marks_bridge_unavailable():
+    with patch.object(rust_bridge_module, "_rust_native", create=True) as rust_native:
+        rust_native.iou_py.side_effect = RuntimeError("boom")
+        bridge = RustBridge()
+        assert bridge.available() is False
+        assert bridge.mode == "http"
 
 
-def test_available_uses_cached_health_status():
-    recorder = UrlopenRecorder({"available": True, "healthy": True})
-    bridge = RustBridge(base_url="http://127.0.0.1:50051", timeout_seconds=1.5)
-
-    with patch("app.infrastructure.ml.rust_bridge.request.urlopen", side_effect=recorder):
+def test_pyo3_probe_success_marks_bridge_available():
+    with patch.object(rust_bridge_module, "_rust_native", create=True) as rust_native:
+        rust_native.iou_py.return_value = 1.0
+        bridge = RustBridge()
         assert bridge.available() is True
+        assert bridge.mode == "pyo3"
+
+
+def test_init_probe_exception_falls_back_to_http_and_logs(caplog):
+    with patch.object(rust_bridge_module, "_rust_native", create=True), patch.object(
+        RustBridge,
+        "_refresh_pyo3_probe",
+        side_effect=RuntimeError("probe init error"),
+    ), caplog.at_level("ERROR", logger="app.infrastructure.ml.rust_bridge"):
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+
+    assert bridge.mode == "http"
+    assert "probe initialization failed" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert "fallback=http" in caplog.text
+
+
+def test_runtime_probe_exception_falls_back_to_http_and_logs(caplog):
+    with patch.object(rust_bridge_module, "_rust_native", create=True), patch.object(
+        RustBridge,
+        "_refresh_pyo3_probe",
+        side_effect=ValueError("probe runtime error"),
+    ), patch.object(
+        RustBridge,
+        "health_check",
+        return_value={"healthy": False},
+    ), caplog.at_level("ERROR", logger="app.infrastructure.ml.rust_bridge"):
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        assert bridge.available() is False
+
+    assert bridge.mode == "http"
+    assert "probe refresh failed" in caplog.text
+    assert "ValueError" in caplog.text
+    assert "fallback=http" in caplog.text
+
+
+def test_pyo3_probe_is_cached_for_short_window():
+    with patch.object(rust_bridge_module, "_rust_native", create=True) as rust_native:
+        rust_native.iou_py.return_value = 1.0
+        bridge = RustBridge()
+        first = bridge.available()
+        second = bridge.available()
+        assert first is True
+        assert second is True
+        assert rust_native.iou_py.call_count == 1
+
+
+def test_http_fallback_used_when_pyo3_missing():
+    with patch.object(rust_bridge_module, "_rust_native", None), patch.object(
+        RustBridge,
+        "health_check",
+        return_value={"healthy": True},
+    ) as health_check:
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        assert bridge.mode == "http"
         assert bridge.available() is True
-
-    assert len(recorder.calls) == 1
-    assert recorder.calls[0]["url"] == "http://127.0.0.1:50051/health"
-    assert recorder.calls[0]["method"] == "GET"
-    assert recorder.calls[0]["timeout"] == 1.5
+        health_check.assert_called()
 
 
-def test_health_check_success_parses_response():
-    bridge = RustBridge(base_url="http://rust-service:50051")
-
-    with patch(
-        "app.infrastructure.ml.rust_bridge.request.urlopen",
-        return_value=FakeResponse({"available": True, "healthy": True, "latency_ms": 7.25}),
+def test_http_health_check_false_when_backend_unhealthy():
+    with patch.object(rust_bridge_module, "_rust_native", None), patch.object(
+        RustBridge,
+        "health_check",
+        return_value={"healthy": False},
     ):
-        result = bridge.health_check()
-
-    assert result["available"] is True
-    assert result["healthy"] is True
-    assert result["error"] is None
-    assert result["latency_ms"] == 7.25
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        assert bridge.available() is False
 
 
-def test_health_check_returns_unavailable_on_url_error():
-    bridge = RustBridge(base_url="http://rust-service:50051")
+def test_http_call_returns_none_when_requests_unavailable(caplog):
+    with patch.object(rust_bridge_module, "requests", None), caplog.at_level("ERROR", logger="app.infrastructure.ml.rust_bridge"):
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        result = bridge._http_call("/v1/filter-boxes", {"boxes": [], "threshold": 0.5}, "boxes")
 
-    with patch(
-        "app.infrastructure.ml.rust_bridge.request.urlopen",
-        side_effect=error.URLError("connection refused"),
-    ):
+    assert result is None
+    assert "requests module unavailable" in caplog.text
+
+
+def test_health_check_returns_unhealthy_when_requests_unavailable():
+    with patch.object(rust_bridge_module, "_rust_native", None), patch.object(rust_bridge_module, "requests", None):
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
         result = bridge.health_check()
 
     assert result["available"] is False
     assert result["healthy"] is False
-    assert "connection refused" in result["error"]
-    assert result["latency_ms"] is not None
+    assert result["mode"] == "http"
+    assert result["error"] == "requests module unavailable"
 
 
-def test_call_maps_compute_iou_to_rest_endpoint():
-    recorder = UrlopenRecorder({"value": 0.5})
-    bridge = RustBridge(base_url="http://127.0.0.1:50051", timeout_seconds=2.0)
+def test_filter_boxes_falls_back_to_http_when_pyo3_probe_fails():
+    with patch.object(rust_bridge_module, "_rust_native", create=True) as rust_native:
+        rust_native.iou_py.side_effect = RuntimeError("boom")
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        with patch.object(bridge, "_http_call", return_value=[[1, 2, 3, 4]]) as http_call:
+            result = bridge.filter_boxes([[1, 2, 3, 4]], threshold=0.5)
 
-    with patch("app.infrastructure.ml.rust_bridge.request.urlopen", side_effect=recorder):
-        result = bridge.call(
-            {
-                "action": "compute_iou",
-                "a": {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
-                "b": {"x1": 5, "y1": 5, "x2": 15, "y2": 15},
-            }
-        )
-
-    assert result.ok is True
-    assert result.data == {"value": 0.5}
-    assert recorder.calls == [
-        {
-            "url": "http://127.0.0.1:50051/v1/iou",
-            "method": "POST",
-            "headers": {"Accept": "application/json", "Content-type": "application/json"},
-            "body": {
-                "a": {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
-                "b": {"x1": 5, "y1": 5, "x2": 15, "y2": 15},
-            },
-            "timeout": 2.0,
-        }
-    ]
+    assert result == [[1, 2, 3, 4]]
+    http_call.assert_called_once_with("/v1/filter-boxes", {"boxes": [[1, 2, 3, 4]], "threshold": 0.5}, "boxes")
 
 
-def test_call_returns_error_message_from_http_error_body():
-    bridge = RustBridge(base_url="http://127.0.0.1:50051")
-    http_error = error.HTTPError(
-        url="http://127.0.0.1:50051/v1/iou",
-        code=400,
-        msg="Bad Request",
-        hdrs=None,
-        fp=BytesIO(json.dumps({"message": "invalid bbox coordinates"}).encode("utf-8")),
+def test_dedupe_events_falls_back_to_http_when_pyo3_probe_fails():
+    with patch.object(rust_bridge_module, "_rust_native", create=True) as rust_native:
+        rust_native.iou_py.side_effect = RuntimeError("boom")
+        bridge = RustBridge(http_base_url="http://rust.local:50051")
+        payload = [{"class_id": 1, "bbox": [0, 0, 10, 10], "timestamp_ms": 1}]
+        with patch.object(bridge, "_http_call", return_value=payload) as http_call:
+            result = bridge.dedupe_events(payload, cooldown_ms=1000, iou_threshold=0.3)
+
+    assert result == payload
+    http_call.assert_called_once_with(
+        "/v1/dedupe-events",
+        {"events": payload, "cooldown_ms": 1000, "iou_threshold": 0.3},
+        "events",
     )
 
-    with patch("app.infrastructure.ml.rust_bridge.request.urlopen", side_effect=http_error):
-        result = bridge.call(
-            {
-                "action": "compute_iou",
-                "a": {"x1": 10, "y1": 10, "x2": 0, "y2": 0},
-                "b": {"x1": 5, "y1": 5, "x2": 15, "y2": 15},
-            }
-        )
 
-    assert result.ok is False
-    assert result.error == "invalid bbox coordinates"
-
-
-def test_call_rejects_unknown_action():
+def test_health_check_reports_pyo3_mode():
     bridge = RustBridge()
-
-    result = bridge.call({"action": "bad_action"})
-
-    assert result.ok is False
-    assert result.error == "unknown action: bad_action"
-
-
-def test_filter_boxes_posts_to_rest_service_and_parses_boxes():
-    recorder = UrlopenRecorder(
-        {
-            "boxes": [
-                {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
-                {"x1": 50, "y1": 50, "x2": 60, "y2": 60},
-            ]
-        }
-    )
-    bridge = RustBridge(base_url="http://127.0.0.1:50051")
-
-    with patch("app.infrastructure.ml.rust_bridge.request.urlopen", side_effect=recorder):
-        result = bridge.filter_boxes([[0, 0, 10, 10], [50, 50, 60, 60]], threshold=0.5)
-
-    assert result == [[0, 0, 10, 10], [50, 50, 60, 60]]
-    assert recorder.calls[0]["url"] == "http://127.0.0.1:50051/v1/filter-boxes"
-    assert recorder.calls[0]["body"] == {
-        "boxes": [
-            {"x1": 0, "y1": 0, "x2": 10, "y2": 10},
-            {"x1": 50, "y1": 50, "x2": 60, "y2": 60},
-        ],
-        "threshold": 0.5,
+    result = bridge.health_check()
+    assert result == {
+        "available": True,
+        "healthy": True,
+        "error": None,
+        "latency_ms": 0.0,
+        "mode": "pyo3",
     }
 
 
-def test_filter_boxes_returns_none_on_request_failure():
-    bridge = RustBridge(base_url="http://127.0.0.1:50051")
+def test_filter_boxes_uses_pyo3_and_returns_boxes():
+    bridge = RustBridge()
 
-    with patch(
-        "app.infrastructure.ml.rust_bridge.request.urlopen",
-        side_effect=error.URLError("service unavailable"),
-    ):
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.filter_overlapping_boxes_py.return_value = [
+            (0, 0, 10, 10),
+            (50, 50, 60, 60),
+        ]
+        result = bridge.filter_boxes([[0, 0, 10, 10], [50, 50, 60, 60]], threshold=0.5)
+
+    assert result == [[0, 0, 10, 10], [50, 50, 60, 60]]
+
+
+def test_filter_boxes_returns_none_when_pyo3_fails():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.filter_overlapping_boxes_py.side_effect = RuntimeError("boom")
         result = bridge.filter_boxes([[0, 0, 10, 10]], threshold=0.5)
 
     assert result is None
 
 
-def test_dedupe_events_posts_to_rest_service_and_parses_events():
-    recorder = UrlopenRecorder(
-        {
-            "events": [
-                {
-                    "class_id": 1,
-                    "bbox": {"x1": 0, "y1": 0, "x2": 100, "y2": 100},
-                    "timestamp_ms": 0,
-                }
-            ]
-        }
-    )
-    bridge = RustBridge(base_url="http://127.0.0.1:50051")
-    events = [{"class_id": 1, "bbox": [0, 0, 100, 100], "timestamp_ms": 0}]
+def test_dedupe_events_uses_pyo3_and_returns_events():
+    bridge = RustBridge()
 
-    with patch("app.infrastructure.ml.rust_bridge.request.urlopen", side_effect=recorder):
-        result = bridge.dedupe_events(events, cooldown_ms=1000, iou_threshold=0.3)
-
-    assert result == [{"class_id": 1, "bbox": [0, 0, 100, 100], "timestamp_ms": 0}]
-    assert recorder.calls[0]["url"] == "http://127.0.0.1:50051/v1/dedupe-events"
-    assert recorder.calls[0]["body"] == {
-        "events": [
-            {
-                "class_id": 1,
-                "bbox": {"x1": 0, "y1": 0, "x2": 100, "y2": 100},
-                "timestamp_ms": 0,
-            }
-        ],
-        "cooldown_ms": 1000,
-        "iou_threshold": 0.3,
-    }
-
-
-def test_dedupe_events_returns_none_on_request_failure():
-    bridge = RustBridge(base_url="http://127.0.0.1:50051")
-
-    with patch(
-        "app.infrastructure.ml.rust_bridge.request.urlopen",
-        side_effect=error.URLError("service unavailable"),
-    ):
-        result = bridge.dedupe_events([], cooldown_ms=1000, iou_threshold=0.3)
-
-    assert result is None
-
-
-def test_dedupe_events_pyo3_returns_none_and_logs_missing_fields(caplog):
-    bridge = RustBridge(prefer_pyo3=False)
-    bridge._use_pyo3 = True
-    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
-        rust_native.dedupe_track_events_py = lambda *args, **kwargs: []
-        with caplog.at_level("ERROR", logger="app.infrastructure.ml.rust_bridge"):
-            result = bridge._dedupe_events_pyo3(
-                [{"class_id": 1, "bbox": [0, 0, 10, 10]}],
-                cooldown_ms=1000,
-                iou_threshold=0.3,
-            )
-
-    assert result is None
-    assert "Missing required field in event data" in caplog.text
-
-
-def test_dedupe_events_pyo3_converts_valid_events_and_returns_results():
-    bridge = RustBridge(prefer_pyo3=False)
-    bridge._use_pyo3 = True
     with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
         rust_native.dedupe_track_events_py.return_value = [
             (1, [0, 0, 10, 10], 1234),
         ]
-        result = bridge._dedupe_events_pyo3(
+        result = bridge.dedupe_events(
             [{"class_id": 1, "bbox": [0, 0, 10, 10], "timestamp_ms": 1234}],
             cooldown_ms=1000,
             iou_threshold=0.3,
@@ -265,6 +195,23 @@ def test_dedupe_events_pyo3_converts_valid_events_and_returns_results():
     assert result == [{"class_id": 1, "bbox": [0, 0, 10, 10], "timestamp_ms": 1234}]
 
 
+def test_dedupe_events_returns_none_when_payload_missing_fields(caplog):
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.dedupe_track_events_py.return_value = []
+        with caplog.at_level("ERROR", logger="app.infrastructure.ml.rust_bridge"):
+            result = bridge.dedupe_events(
+                [{"class_id": 1, "bbox": [0, 0, 10, 10]}],
+                cooldown_ms=1000,
+                iou_threshold=0.3,
+            )
+
+    assert result is None
+    assert "timestamp_ms" in caplog.text
+
+
 def test_close_is_a_noop():
     bridge = RustBridge()
     assert bridge.close() is None
+

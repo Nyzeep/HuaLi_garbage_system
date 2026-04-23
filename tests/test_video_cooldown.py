@@ -4,20 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-
-# ---------------------------------------------------------------------------
-# Pure _iou — copied from video_service to avoid heavy import chain
-# ---------------------------------------------------------------------------
-
-def _iou(b1, b2):
-    x1, y1 = max(b1[0], b2[0]), max(b1[1], b2[1])
-    x2, y2 = min(b1[2], b2[2]), min(b1[3], b2[3])
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    a1 = max(0, b1[2] - b1[0]) * max(0, b1[3] - b1[1])
-    a2 = max(0, b2[2] - b2[0]) * max(0, b2[3] - b2[1])
-    union = a1 + a2 - inter
-    return inter / union if union > 0 else 0.0
-
+from app.core.geometry import compute_iou
 
 bbox_st = st.builds(
     lambda x, y, w, h: [x, y, x + w, y + h],
@@ -28,17 +15,17 @@ bbox_st = st.builds(
 
 @given(bbox_st, bbox_st)
 def test_iou_symmetry(a, b):
-    assert _iou(a, b) == pytest.approx(_iou(b, a))
+    assert compute_iou(a, b) == pytest.approx(compute_iou(b, a))
 
 
 @given(bbox_st, bbox_st)
 def test_iou_in_range(a, b):
-    assert 0.0 <= _iou(a, b) <= 1.0 + 1e-9
+    assert 0.0 <= compute_iou(a, b) <= 1.0 + 1e-9
 
 
 @given(bbox_st)
 def test_iou_self_is_one_or_zero(b):
-    result = _iou(b, b)
+    result = compute_iou(b, b)
     area = max(0, b[2] - b[0]) * max(0, b[3] - b[1])
     if area > 0:
         assert result == pytest.approx(1.0)
@@ -79,7 +66,7 @@ def apply_cooldown(detections, current_ts, alert_history):
         suppressed = any(
             r["class_id"] == class_id
             and current_ts - r["timestamp"] <= cooldown
-            and _iou(bbox, r["bbox"]) >= IOU_MATCH_THRESHOLD
+            and compute_iou(bbox, r["bbox"]) >= IOU_MATCH_THRESHOLD
             for r in alert_history
         )
         if suppressed:

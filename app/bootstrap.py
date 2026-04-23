@@ -57,14 +57,13 @@ def _log_startup_summary() -> None:
     ]
 
     logger.info(
-        "startup config app=%s version=%s debug=%s uploads_dir=%s redis_url=%s rust_url=%s rust_timeout_seconds=%.2f",
+        "startup config app=%s version=%s debug=%s uploads_dir=%s redis_url=%s rust_mode=%s",
         settings.app_name,
         settings.app_version,
         settings.debug,
         settings.uploads_dir,
         settings.redis_url,
-        settings.rust_service_url,
-        settings.rust_service_timeout_seconds,
+        rust_bridge.mode,
     )
     logger.info("startup models=%s", model_summaries)
     logger.info("startup rust_status=%s", rust_status)

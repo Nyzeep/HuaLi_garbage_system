@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from itertools import count
 
+from app.core.geometry import compute_iou
+
 
 @dataclass
 class Track:
@@ -58,7 +60,7 @@ class TrackEngine:
                     continue
                 if tr.class_id != det.class_id:
                     continue
-                score = _iou(det.bbox, tr.bbox)
+                score = compute_iou(det.bbox, tr.bbox)
                 if score > best_iou:
                     best_iou = score
                     best_track = tr
@@ -118,14 +120,3 @@ class TrackEngine:
         ]
         return list(self._active)
 
-
-def _iou(bbox1: list[int], bbox2: list[int]) -> float:
-    x1 = max(bbox1[0], bbox2[0])
-    y1 = max(bbox1[1], bbox2[1])
-    x2 = min(bbox1[2], bbox2[2])
-    y2 = min(bbox1[3], bbox2[3])
-    inter = max(0, x2 - x1) * max(0, y2 - y1)
-    area1 = max(0, bbox1[2] - bbox1[0]) * max(0, bbox1[3] - bbox1[1])
-    area2 = max(0, bbox2[2] - bbox2[0]) * max(0, bbox2[3] - bbox2[1])
-    union = area1 + area2 - inter
-    return inter / union if union > 0 else 0.0

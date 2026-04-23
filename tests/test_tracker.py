@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from app.upgrade.tracker import TrackEngine, _iou
+from app.core.geometry import compute_iou
+from app.upgrade.tracker import TrackEngine
 
 
 # ---------------------------------------------------------------------------
@@ -14,21 +16,48 @@ from app.upgrade.tracker import TrackEngine, _iou
 # ---------------------------------------------------------------------------
 
 def test_iou_identical():
-    assert _iou([0, 0, 100, 100], [0, 0, 100, 100]) == pytest.approx(1.0)
+    assert compute_iou([0, 0, 100, 100], [0, 0, 100, 100]) == pytest.approx(1.0)
 
 
 def test_iou_no_overlap():
-    assert _iou([0, 0, 10, 10], [20, 20, 30, 30]) == pytest.approx(0.0)
+    assert compute_iou([0, 0, 10, 10], [20, 20, 30, 30]) == pytest.approx(0.0)
 
 
 def test_iou_partial():
     # Two 100x100 boxes offset by 50 → 50x50 intersection, union=100*100*2-50*50=17500
-    result = _iou([0, 0, 100, 100], [50, 50, 150, 150])
+    result = compute_iou([0, 0, 100, 100], [50, 50, 150, 150])
     assert result == pytest.approx(2500 / 17500, rel=1e-6)
 
 
 def test_iou_zero_area():
-    assert _iou([5, 5, 5, 5], [5, 5, 5, 5]) == pytest.approx(0.0)
+    assert compute_iou([5, 5, 5, 5], [5, 5, 5, 5]) == pytest.approx(0.0)
+
+
+def test_iou_accepts_float_bbox():
+    result = compute_iou([0.0, 0.0, 100.5, 100.5], [50.25, 50.25, 150.75, 150.75])
+    expected_inter = 50.25 * 50.25
+    expected_union = 100.5 * 100.5 * 2 - expected_inter
+    assert result == pytest.approx(expected_inter / expected_union, rel=1e-6)
+
+
+def test_iou_invalid_bbox_length_raises():
+    with pytest.raises(ValueError, match="exactly 4"):
+        compute_iou([0, 0, 1], [0, 0, 1, 1])
+
+
+def test_iou_non_numeric_bbox_raises():
+    with pytest.raises(ValueError, match="numeric"):
+        compute_iou(cast(Any, [0, 0, "x", 1]), [0, 0, 1, 1])
+
+
+def test_iou_non_finite_bbox_raises():
+    with pytest.raises(ValueError, match="finite"):
+        compute_iou([0, 0, float("nan"), 1], [0, 0, 1, 1])
+
+
+def test_iou_invalid_bbox_coordinate_order_raises():
+    with pytest.raises(ValueError, match="x1 <= x2 and y1 <= y2"):
+        compute_iou([10, 0, 5, 5], [0, 0, 1, 1])
 
 
 @given(
@@ -38,7 +67,7 @@ def test_iou_zero_area():
 def test_iou_symmetry(x1, y1, x2, y2):
     a = [0, 0, 50, 50]
     b = [x1, y1, x1 + x2, y1 + y2]
-    assert _iou(a, b) == pytest.approx(_iou(b, a))
+    assert compute_iou(a, b) == pytest.approx(compute_iou(b, a))
 
 
 @given(
@@ -48,7 +77,7 @@ def test_iou_symmetry(x1, y1, x2, y2):
 def test_iou_range(x1, y1, w, h):
     a = [0, 0, 100, 100]
     b = [x1, y1, x1 + w, y1 + h]
-    result = _iou(a, b)
+    result = compute_iou(a, b)
     assert 0.0 <= result <= 1.0
 
 

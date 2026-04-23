@@ -6,7 +6,7 @@ from pathlib import Path
 from app.infrastructure.ml.backends import InferenceBackend
 
 
-@dataclass
+@dataclass(frozen=True)
 class ModelDescriptor:
     key: str
     onnx_path: Path
@@ -17,25 +17,46 @@ class ModelDescriptor:
 @dataclass
 class ModelBundle:
     descriptor: ModelDescriptor
-    backend: InferenceBackend | None = None
+    backend: InferenceBackend | None
 
     @property
     def loaded(self) -> bool:
-        return bool(self.backend and self.backend.loaded)
+        return bool(self.backend is not None and self.backend.loaded)
 
 
 class ModelRegistry:
     def __init__(self) -> None:
-        self._bundles: dict[str, ModelBundle] = {}
+        self._bundles: list[ModelBundle] = []
+        self._bundle_index_by_key: dict[str, int] = {}
 
     def register(self, descriptor: ModelDescriptor, backend: InferenceBackend | None) -> None:
-        self._bundles[descriptor.key] = ModelBundle(descriptor=descriptor, backend=backend)
+        bundle = ModelBundle(descriptor=descriptor, backend=backend)
+        index = self._bundle_index_by_key.get(descriptor.key)
+        if index is None:
+            self._bundle_index_by_key[descriptor.key] = len(self._bundles)
+            self._bundles.append(bundle)
+            return
+        self._bundles[index] = bundle
 
     def get(self, key: str) -> ModelBundle | None:
-        return self._bundles.get(key)
+        """Return the model bundle for ``key``.
+
+        Args:
+            key: Registered model key.
+
+        Returns:
+            The matching ``ModelBundle`` when found; otherwise ``None``.
+
+        Raises:
+            None.
+        """
+        index = self._bundle_index_by_key.get(key)
+        if index is None:
+            return None
+        return self._bundles[index]
 
     def items(self) -> list[ModelBundle]:
-        return list(self._bundles.values())
+        return list(self._bundles)
 
     def loaded_map(self) -> dict[str, bool]:
-        return {key: bundle.loaded for key, bundle in self._bundles.items()}
+        return {bundle.descriptor.key: bundle.loaded for bundle in self._bundles}
