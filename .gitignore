@@ -11,3 +11,4 @@ app/uploads/
 .trae/
 .env
 Optimization.md
+.runtime/

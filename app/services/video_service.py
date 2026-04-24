@@ -36,8 +36,6 @@ class VideoProcessingService:
         "h264_amf",
     )
 
-    BIN_COLOR_REFRESH_SECONDS = 3.0
-
     def __init__(self, detection_service: DetectionService, rust_bridge: RustBridge | None = None):
         self.detection_service = detection_service
         self.rust_bridge = rust_bridge or RustBridge()
@@ -358,42 +356,6 @@ class VideoProcessingService:
             out.append(item)
 
         return out, len(alarms)
-
-    def _attach_video_bin_color_cached(self, frame, detections: list[dict], current_ts: float) -> list[dict]:
-        if self.detection_service.bin_color_service is None or not self.detection_service.bin_color_service.loaded:
-            return detections
-
-        updated: list[dict] = []
-        active_track_ids: set[int] = set()
-        for det in detections:
-            item = det.copy()
-            if item.get("class_id") != 0 or item.get("track_id") is None:
-                updated.append(item)
-                continue
-
-            track_id = int(item["track_id"])
-            active_track_ids.add(track_id)
-            cached = self._video_bin_color_cache.get(track_id)
-            needs_refresh = cached is None or current_ts - float(cached["updated_at"]) >= self.BIN_COLOR_REFRESH_SECONDS
-            if needs_refresh:
-                enriched = self.detection_service._attach_bin_color(frame, [item])[0]
-                self._video_bin_color_cache[track_id] = {
-                    "updated_at": current_ts,
-                    "bin_color": enriched.get("bin_color"),
-                    "bin_color_confidence": enriched.get("bin_color_confidence"),
-                    "bin_type_key": enriched.get("bin_type_key"),
-                    "bin_type_name": enriched.get("bin_type_name"),
-                    "class_name": enriched.get("class_name"),
-                }
-                item = enriched
-            else:
-                item.update({k: v for k, v in cached.items() if k != "updated_at" and v is not None})
-            updated.append(item)
-
-        stale = [track_id for track_id in self._video_bin_color_cache if track_id not in active_track_ids]
-        for track_id in stale:
-            self._video_bin_color_cache.pop(track_id, None)
-        return updated
 
     def _attach_video_bin_color_cached(self, frame, detections: list[dict], current_ts: float) -> list[dict]:
         if self.detection_service.bin_color_service is None or not self.detection_service.bin_color_service.loaded:
