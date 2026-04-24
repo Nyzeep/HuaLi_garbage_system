@@ -109,24 +109,22 @@ class VideoProcessingService:
         ]
         return updated
 
-    def _attach_upgrade_metadata(self, detections: list[dict]) -> tuple[list[dict], int]:
+    def _attach_upgrade_metadata(
+        self,
+        detections: list[dict],
+        timestamp: float | None = None,
+    ) -> tuple[list[dict], int]:
         """Attach track_id from upgrade pipeline without changing existing alert semantics."""
-        pipe_result = self.upgrade_pipeline.run_detections(detections)
+        pipe_result = self.upgrade_pipeline.run_detections(detections, timestamp=timestamp)
         tracks = pipe_result.tracks
         alarms = pipe_result.alarms
 
-        # Map by (class_id, bbox) for deterministic binding in current frame.
-        track_map: dict[tuple[int, tuple[int, int, int, int]], int] = {}
-        for tr in tracks:
-            key = (int(tr.class_id), tuple(int(v) for v in tr.bbox))
-            track_map[key] = int(tr.track_id)
-
+        # Keep index alignment with tracker output to avoid key-collision ambiguity.
         out: list[dict] = []
-        for det in detections:
-            key = (int(det.get("class_id", -1)), tuple(int(v) for v in det.get("bbox", [])))
+        for idx, det in enumerate(detections):
             item = det.copy()
-            if key in track_map:
-                item["track_id"] = track_map[key]
+            if idx < len(tracks):
+                item["track_id"] = int(tracks[idx].track_id)
             out.append(item)
 
         return out, len(alarms)
@@ -183,12 +181,16 @@ class VideoProcessingService:
                     continue
 
                 detections = self.detection_service.detect(frame)
+                current_ts = (frame_count / fps) if fps > 0 else 0.0
                 detections = self._apply_video_alert_cooldown(
                     detections=detections,
-                    current_ts=(frame_count / fps) if fps > 0 else 0.0,
+                    current_ts=current_ts,
                     alert_history=alert_history,
                 )
-                detections, pipeline_alarm_count = self._attach_upgrade_metadata(detections)
+                detections, pipeline_alarm_count = self._attach_upgrade_metadata(
+                    detections,
+                    timestamp=current_ts,
+                )
                 total_pipeline_alarms += pipeline_alarm_count
 
                 rendered = self.detection_service.draw_boxes(frame, detections)

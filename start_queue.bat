@@ -85,13 +85,17 @@ if "!NEED_INSTALL!"=="1" (
     )
 )
 
-echo [2/3] Starting Celery Worker...
-start "Celery Worker" cmd /k ""!VENV_PYTHON!" -m celery -A app.celery_app worker --loglevel=info --pool=solo"
+echo [2/3] Starting Celery Worker in background...
+for /f %%P in ('
+    powershell -NoProfile -Command "$p=Start-Process -WindowStyle Hidden -FilePath '!VENV_PYTHON!' -ArgumentList @('-m','celery','-A','app.celery_app','worker','--loglevel=info','--pool=solo') -PassThru; $p.Id"
+') do set "CELERY_PID=%%P"
 
 timeout /t 2 /nobreak >nul
 
-echo [3/3] Starting FastAPI Web...
-start "FastAPI Web" cmd /k ""!VENV_PYTHON!" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+echo [3/3] Starting FastAPI Web in background...
+for /f %%P in ('
+    powershell -NoProfile -Command "$p=Start-Process -WindowStyle Hidden -FilePath '!VENV_PYTHON!' -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000','--reload') -PassThru; $p.Id"
+') do set "UVICORN_PID=%%P"
 
 timeout /t 2 /nobreak >nul
 start "" http://127.0.0.1:8000
@@ -99,9 +103,14 @@ start "" http://127.0.0.1:8000
 echo.
 echo Started successfully:
 echo - Virtual environment: !VENV_DIR!
-echo - Celery Worker window
-echo - FastAPI Web window
+echo - Celery PID: !CELERY_PID!
+echo - Uvicorn PID: !UVICORN_PID!
 echo - Browser: http://127.0.0.1:8000
 echo.
-echo Close the two terminal windows to stop services.
-pause
+echo Press any key to stop all services...
+pause >nul
+
+echo Stopping services...
+if defined UVICORN_PID taskkill /PID !UVICORN_PID! /T /F >nul 2>&1
+if defined CELERY_PID taskkill /PID !CELERY_PID! /T /F >nul 2>&1
+echo All services stopped.

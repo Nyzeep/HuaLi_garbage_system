@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from app.schemas import (
     VideoTaskStatusResponse,
 )
 from app.services.detection_service import DetectionService
+from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
 from app.services.record_service import RecordService
 from app.tasks import process_video_task, run_video_task
 from app.utils import base64_to_frame
@@ -33,6 +35,12 @@ from app.utils import base64_to_frame
 def build_api_router(settings: Settings, started_at: str) -> APIRouter:
     router = APIRouter(prefix=settings.api_prefix)
     record_service = RecordService(settings.uploads_dir)
+    # Shared tracker state for image/base64 endpoints so continuous requests can keep stable IDs.
+    upgrade_pipeline = UpgradePipeline(
+        detection_engine=DetectionEngine(None),
+        track_engine=TrackEngine(),
+        alarm_engine=AlarmEngine(min_consecutive_frames=2),
+    )
 
     def has_celery_worker() -> bool:
         if settings.celery_task_always_eager:
@@ -55,12 +63,12 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
 
     def validate_extension(filename: str, expected: set[str] | None = None) -> str:
         if "." not in filename:
-            raise HTTPException(status_code=400, detail="文件缺少后缀")
+            raise HTTPException(status_code=400, detail="鏂囦欢缂哄皯鍚庣紑")
         ext = filename.rsplit(".", 1)[1].lower()
         if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(status_code=400, detail="文件格式不支持")
+            raise HTTPException(status_code=400, detail="Unsupported file format")
         if expected is not None and ext not in expected:
-            raise HTTPException(status_code=400, detail="文件类型不匹配")
+            raise HTTPException(status_code=400, detail="File type mismatch")
         return ext
 
     async def read_image_file(file: UploadFile) -> np.ndarray:
@@ -68,8 +76,19 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         content = await file.read()
         image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
-            raise HTTPException(status_code=400, detail="图片解析失败")
+            raise HTTPException(status_code=400, detail="鍥剧墖瑙ｆ瀽澶辫触")
         return image
+
+    def attach_track_ids(detections: list[dict]) -> list[dict]:
+        pipe_result = upgrade_pipeline.run_detections(detections, timestamp=time.time())
+        tracks = pipe_result.tracks
+        out: list[dict] = []
+        for idx, det in enumerate(detections):
+            item = det.copy()
+            if idx < len(tracks):
+                item["track_id"] = int(tracks[idx].track_id)
+            out.append(item)
+        return out
 
     def build_detect_response(payload: dict) -> dict:
         return {
@@ -83,6 +102,13 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
                     "alert": item["alert"],
                     "icon": item.get("icon", ""),
                     "source": item.get("source_model", ""),
+                    "track_id": item.get("track_id"),
+                    "bin_color": item.get("bin_color"),
+                    "bin_color_confidence": item.get("bin_color_confidence"),
+                    "bin_type_key": item.get("bin_type_key"),
+                    "bin_type_name": item.get("bin_type_name"),
+                    "related_bin_type_key": item.get("related_bin_type_key"),
+                    "related_bin_type_name": item.get("related_bin_type_name"),
                 }
                 for item in payload["detections"]
             ],
@@ -99,6 +125,7 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         image = await read_image_file(file)
         # Image upload should alert on every request (no cooldown).
         detections = detection_service.detect(image)
+        detections = attach_track_ids(detections)
         rendered = detection_service.draw_boxes(image, detections)
         payload = detection_service.build_response(image, detections, with_image=True)
         record_service.create_alert_record(db, payload["scene"], detections, rendered, source="image")
@@ -113,10 +140,11 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         try:
             image = base64_to_frame(request.image)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail="图片解析失败") from exc
+            raise HTTPException(status_code=400, detail="鍥剧墖瑙ｆ瀽澶辫触") from exc
 
         # Camera/base64 requests follow the same no-cooldown behavior as image upload.
         detections = detection_service.detect(image)
+        detections = attach_track_ids(detections)
         rendered = detection_service.draw_boxes(image, detections)
         payload = detection_service.build_response(image, detections, with_image=True)
         record_service.create_alert_record(db, payload["scene"], detections, rendered, source="camera")
@@ -147,10 +175,10 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
             input_filename=file.filename or input_filename,
             input_path=input_path.as_posix(),
             status="pending",
-            message="任务已提交，等待处理",
+            message="浠诲姟宸叉彁浜わ紝绛夊緟澶勭悊",
         )
 
-        dispatch_message = "任务已进入后台处理队列"
+        dispatch_message = "Task queued for background processing"
         if has_celery_worker():
             try:
                 process_video_task.apply_async(
@@ -162,11 +190,11 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
                 )
             except Exception:
                 start_local_video_task(task_id=task_id, input_path=input_path, skip_frames=safe_skip_frames)
-                dispatch_message = "Celery 分发失败，已切换本地线程处理"
+                dispatch_message = "Celery 鍒嗗彂澶辫触锛屽凡鍒囨崲鏈湴绾跨▼澶勭悊"
                 record_service.update_video_task(db, task_id, message=dispatch_message)
         else:
             start_local_video_task(task_id=task_id, input_path=input_path, skip_frames=safe_skip_frames)
-            dispatch_message = "未检测到 Celery worker，已切换本地线程处理"
+            dispatch_message = "鏈娴嬪埌 Celery worker锛屽凡鍒囨崲鏈湴绾跨▼澶勭悊"
             record_service.update_video_task(db, task_id, message=dispatch_message)
 
         return {
@@ -180,7 +208,7 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
     async def get_task_status(task_id: str, db: Session = Depends(get_db)) -> dict:
         record = record_service.get_video_task(db, task_id)
         if record is None:
-            raise HTTPException(status_code=404, detail="任务不存在")
+            raise HTTPException(status_code=404, detail="Task not found")
 
         payload = {
             "success": True,
@@ -235,7 +263,7 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
     async def get_alert_image(record_uid: str, db: Session = Depends(get_db)) -> dict:
         image_b64 = record_service.get_alert_image_base64(db, record_uid)
         if image_b64 is None:
-            raise HTTPException(status_code=404, detail="记录不存在")
+            raise HTTPException(status_code=404, detail="Record not found")
         return {"image": image_b64}
 
     @router.get("/statistics", response_model=StatisticsResponse)
@@ -249,12 +277,20 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
     @router.get("/status", response_model=SystemStatusResponse)
     async def get_status(detection_service: DetectionService = Depends(get_detection_service)) -> dict:
         models_loaded = detection_service.models_loaded
+        detector_loaded = any(
+            [
+                models_loaded.get("garbage", False),
+                models_loaded.get("fire", False),
+                models_loaded.get("smoke", False),
+            ],
+        )
         return {
-            "model_loaded": any(models_loaded.values()),
+            "model_loaded": detector_loaded,
             "garbage_model": models_loaded.get("garbage", False),
             "fire_model": models_loaded.get("fire", False),
             "smoke_model": models_loaded.get("smoke", False),
-            "mode": "正常检测" if any(models_loaded.values()) else "演示模式",
+            "bin_color_model": models_loaded.get("bin_color", False),
+            "mode": "正常检测" if detector_loaded else "演示模式",
             "uptime": started_at,
             "class_count": 5,
             "version": settings.app_version,
@@ -262,4 +298,12 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         }
 
     return router
+
+
+
+
+
+
+
+
 

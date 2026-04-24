@@ -8,9 +8,11 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 
 from app.config import Settings
 from app.constants import ALL_CLASSES
+from app.services.bin_color_service import ResNet18BinColorService
 from app.services.inference import InferenceBackend, OnnxYoloBackend, UltralyticsBackend
 from app.utils import frame_to_base64
 
@@ -20,6 +22,20 @@ class DetectorBundle:
     key: str
     class_mapping: dict[int, int]
     backend: InferenceBackend | None = None
+
+
+BIN_COLOR_TO_TYPE: dict[str, dict[str, str]] = {
+    "blue": {"key": "recyclable", "name": "可回收垃圾桶"},
+    "red": {"key": "hazardous", "name": "有害垃圾桶"},
+    "gray": {"key": "other", "name": "其他垃圾桶"},
+    "green": {"key": "kitchen", "name": "厨余垃圾桶"},
+    "other": {"key": "other_misc", "name": "其他"},
+}
+
+EVENT_NAME_OVERRIDE: dict[int, str] = {
+    3: "火",
+    4: "烟",
+}
 
 
 class AlertCooldown:
@@ -52,6 +68,7 @@ class DetectionService:
         self.settings = settings
         self.cooldown = AlertCooldown()
         self.detectors = self._build_detectors()
+        self.bin_color_classifier = ResNet18BinColorService(settings.bin_color_resnet18_model)
 
     def _select_backend(self, onnx_path: Path, pt_path: Path) -> InferenceBackend | None:
         onnx_backend = OnnxYoloBackend(onnx_path)
@@ -65,27 +82,62 @@ class DetectionService:
         return None
 
     def _build_detectors(self) -> list[DetectorBundle]:
-        return [
+        detectors: list[DetectorBundle] = [
             DetectorBundle(
                 key="garbage",
                 # Garbage model class order: 0=garbage_bin, 1=overflow, 2=garbage
                 class_mapping={0: 2, 1: 0, 2: 1},
                 backend=self._select_backend(self.settings.garbage_onnx_model, self.settings.garbage_pt_model),
             ),
-            DetectorBundle(
-                key="fire",
-                class_mapping={0: 3},
-                backend=self._select_backend(self.settings.fire_onnx_model, self.settings.fire_pt_model),
-            ),
         ]
+
+        smoke_backend = self._select_backend(self.settings.smoke_onnx_model, self.settings.smoke_pt_model)
+        if smoke_backend is not None and smoke_backend.loaded:
+            smoke_mapping: dict[int, int] = {
+                self.settings.smoke_model_smoke_class_id: 4,  # smoke
+            }
+            if self.settings.smoke_model_include_fire:
+                smoke_mapping[self.settings.smoke_model_fire_class_id] = 3  # fire
+            detectors.append(
+                DetectorBundle(
+                    key="smoke",
+                    class_mapping=smoke_mapping,
+                    backend=smoke_backend,
+                ),
+            )
+            if not self.settings.smoke_model_include_fire:
+                detectors.append(
+                    DetectorBundle(
+                        key="fire",
+                        class_mapping={0: 3},
+                        backend=self._select_backend(self.settings.fire_onnx_model, self.settings.fire_pt_model),
+                    ),
+                )
+        else:
+            detectors.append(
+                DetectorBundle(
+                    key="fire",
+                    class_mapping={0: 3},
+                    backend=self._select_backend(self.settings.fire_onnx_model, self.settings.fire_pt_model),
+                ),
+            )
+
+        return detectors
+
+    def _detector_models_available(self) -> bool:
+        return any(bundle.backend and bundle.backend.loaded for bundle in self.detectors)
 
     @property
     def models_loaded(self) -> dict[str, bool]:
-        return {bundle.key: bool(bundle.backend and bundle.backend.loaded) for bundle in self.detectors}
+        models = {bundle.key: bool(bundle.backend and bundle.backend.loaded) for bundle in self.detectors}
+        models["bin_color"] = bool(self.bin_color_classifier.loaded)
+        return models
 
     def detect(self, image: np.ndarray) -> list[dict]:
-        if any(self.models_loaded.values()):
-            return self._run_models(image)
+        if self._detector_models_available():
+            detections = self._run_models(image)
+            detections = self._attach_bin_color(image, detections)
+            return self._attach_alert_bin_context(detections)
         return self._fake_detect(image)
 
     def _run_models(self, image: np.ndarray) -> list[dict]:
@@ -98,7 +150,7 @@ class DetectionService:
                 continue
 
             if bundle.key == "fire":
-                conf_threshold = 0.15
+                conf_threshold = 0.30
             elif bundle.key == "smoke":
                 conf_threshold = 0.15
             else:
@@ -129,10 +181,11 @@ class DetectionService:
                     continue
 
                 info = ALL_CLASSES[class_id]
+                class_name = EVENT_NAME_OVERRIDE.get(class_id, info["name"])
                 result_list.append(
                     {
                         "class_id": class_id,
-                        "class_name": info["name"],
+                        "class_name": class_name,
                         "confidence": round(prediction.confidence, 3),
                         "bbox": [x1, y1, x2, y2],
                         "alert": info["alert"],
@@ -179,6 +232,122 @@ class DetectionService:
 
         return filtered
 
+    def _attach_bin_color(self, image: np.ndarray, detections: list[dict]) -> list[dict]:
+        if not self.bin_color_classifier.loaded:
+            return detections
+
+        h, w = image.shape[:2]
+        fused: list[dict] = []
+        for det in detections:
+            if det["class_id"] != 0:
+                fused.append(det)
+                continue
+
+            x1, y1, x2, y2 = map(int, det.get("bbox", [0, 0, 0, 0]))
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            if x2 <= x1 or y2 <= y1:
+                fused.append(det)
+                continue
+
+            crop = image[y1:y2, x1:x2]
+            pred = self.bin_color_classifier.predict(crop)
+            det2 = det.copy()
+            if pred is not None and pred.confidence >= self.settings.bin_color_min_confidence:
+                color_label = str(pred.label).lower()
+                type_info = BIN_COLOR_TO_TYPE.get(color_label, {"key": "other_misc", "name": "其他"})
+                det2["bin_color"] = color_label
+                det2["bin_color_confidence"] = round(pred.confidence, 3)
+                det2["bin_type_key"] = type_info["key"]
+                det2["bin_type_name"] = type_info["name"]
+                det2["class_name"] = type_info["name"]
+            fused.append(det2)
+        return fused
+
+    @staticmethod
+    def _bbox_center(bbox: list[int]) -> tuple[float, float]:
+        x1, y1, x2, y2 = bbox
+        return (x1 + x2) / 2.0, (y1 + y2) / 2.0
+
+    @staticmethod
+    def _load_chinese_font(size: int) -> ImageFont.ImageFont:
+        font_candidates = [
+            "C:/Windows/Fonts/msyh.ttc",   # 微软雅黑
+            "C:/Windows/Fonts/simhei.ttf", # 黑体
+            "C:/Windows/Fonts/simsun.ttc", # 宋体
+        ]
+        for font_path in font_candidates:
+            try:
+                return ImageFont.truetype(font_path, size=size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def _draw_label_text(
+        self,
+        image: np.ndarray,
+        text: str,
+        x: int,
+        y: int,
+        bg_color_bgr: tuple[int, int, int],
+    ) -> np.ndarray:
+        # Use PIL to render Chinese text to avoid cv2 "????" issue.
+        font = self._load_chinese_font(size=20)
+        pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+
+        text_bbox = draw.textbbox((0, 0), text, font=font)
+        tw = text_bbox[2] - text_bbox[0]
+        th = text_bbox[3] - text_bbox[1]
+        pad_x, pad_y = 6, 4
+
+        left = max(0, x)
+        top = max(0, y - th - pad_y * 2)
+        right = min(pil_img.width, left + tw + pad_x * 2)
+        bottom = min(pil_img.height, top + th + pad_y * 2)
+
+        bg_color_rgb = (int(bg_color_bgr[2]), int(bg_color_bgr[1]), int(bg_color_bgr[0]))
+        draw.rectangle([left, top, right, bottom], fill=bg_color_rgb)
+        draw.text((left + pad_x, top + pad_y), text, fill=(255, 255, 255), font=font)
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    def _attach_alert_bin_context(self, detections: list[dict]) -> list[dict]:
+        """
+        Attach nearest bin subtype context for:
+        - overflow (class_id=1): "<bin_type>溢出"
+        - scattered garbage (class_id=2): "<bin_type>附近散落垃圾"
+        """
+        bins = [d for d in detections if d.get("class_id") == 0 and d.get("bin_type_name")]
+        if not bins:
+            return detections
+
+        updated: list[dict] = []
+        for det in detections:
+            cid = det.get("class_id")
+            if cid not in (1, 2):
+                updated.append(det)
+                continue
+
+            cx, cy = self._bbox_center(det["bbox"])
+            nearest_bin = min(
+                bins,
+                key=lambda b: (self._bbox_center(b["bbox"])[0] - cx) ** 2 + (self._bbox_center(b["bbox"])[1] - cy) ** 2,
+            )
+            bin_type_name = nearest_bin.get("bin_type_name", "垃圾桶")
+            bin_type_key = nearest_bin.get("bin_type_key", "other_misc")
+
+            det2 = det.copy()
+            det2["related_bin_type_name"] = bin_type_name
+            det2["related_bin_type_key"] = bin_type_key
+            if cid == 1:
+                det2["class_name"] = f"{bin_type_name}溢出"
+            else:
+                det2["class_name"] = f"{bin_type_name}附近散落垃圾"
+            updated.append(det2)
+        return updated
+
     def _fake_detect(self, image: np.ndarray) -> list[dict]:
         h, w = image.shape[:2]
         seed_val = int(image[h // 2, w // 2, 0]) if image.ndim == 3 else 0
@@ -223,32 +392,26 @@ class DetectionService:
             0: "GarbageBin",
             1: "Overflow",
             2: "Garbage",
-            3: "FIRE",
-            4: "SMOKE",
+            3: "火",
+            4: "烟",
         }
 
 
         for detection in detections:
             x1, y1, x2, y2 = detection["bbox"]
             box_color = detection.get("color", (0, 255, 0))
-            en_name = en_label_map.get(detection["class_id"], detection["class_name"])
+            default_name = ALL_CLASSES.get(detection["class_id"], {}).get("name", "")
+            if detection.get("class_name") and detection["class_name"] != default_name:
+                en_name = detection["class_name"]
+            elif detection["class_id"] == 0 and detection.get("bin_type_name"):
+                en_name = detection["bin_type_name"]
+            else:
+                en_name = en_label_map.get(detection["class_id"], detection["class_name"])
             label = f"{en_name} {detection['confidence']:.0%}"
             line_w = 3 if detection["alert"] else 2
 
             cv2.rectangle(output, (x1, y1), (x2, y2), box_color, line_w)
-            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-            top = max(0, y1 - text_h - 8)
-            cv2.rectangle(output, (x1, top), (x1 + text_w + 6, y1), box_color, -1)
-            cv2.putText(
-                output,
-                label,
-                (x1 + 3, max(text_h, y1 - 4)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                1,
-                cv2.LINE_AA,
-            )
+            output = self._draw_label_text(output, label, x1, y1, box_color)
             if detection["alert"]:
                 cv2.putText(
                     output,

@@ -14,6 +14,13 @@ class DetectionItem(BaseModel):
     alert: bool
     icon: str = ""
     source: str = ""
+    track_id: int | None = None
+    bin_color: str | None = None
+    bin_color_confidence: float | None = None
+    bin_type_key: str | None = None
+    bin_type_name: str | None = None
+    related_bin_type_key: str | None = None
+    related_bin_type_name: str | None = None
 
 
 class SceneInfo(BaseModel):
@@ -83,6 +90,7 @@ class SystemStatusResponse(BaseModel):
     garbage_model: bool
     fire_model: bool
     smoke_model: bool
+    bin_color_model: bool = False
     mode: str
     uptime: str
     class_count: int
@@ -109,4 +117,6 @@ class VideoTaskStatusResponse(BaseModel):
 
 class Base64ImageRequest(BaseModel):
     image: str = Field(..., min_length=16)
+
+
 
