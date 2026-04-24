@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -112,7 +112,7 @@ class VideoTaskStatusResponse(BaseModel):
     progress: int
     message: str
     result_video: str | None = None
-    stats: dict[str, int | str] | None = None
+    stats: dict[str, Any] | None = None
 
 
 class Base64ImageRequest(BaseModel):

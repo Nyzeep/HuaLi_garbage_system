@@ -962,7 +962,7 @@ async function startVideoDetection() {
     });
     const submitData = await submitResp.json().catch(() => ({}));
     if (!submitResp.ok || !submitData.success || !submitData.task_id) {
-      throw new Error(submitData.error || submitData.message || '视频任务提交失败');
+      throw new Error(submitData.detail || submitData.error || submitData.message || '视频任务提交失败');
     }
 
     await pollVideoTaskStatus(submitData.task_id);
@@ -985,7 +985,7 @@ async function pollVideoTaskStatus(taskId) {
     const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(result.error || result.message || '任务状态查询失败');
+      throw new Error(result.detail || result.error || result.message || '任务状态查询失败');
     }
 
     const progress = Math.max(0, Math.min(100, Number(result.progress || 0)));
