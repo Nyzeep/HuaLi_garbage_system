@@ -52,6 +52,8 @@ class Settings(BaseSettings):
 
     default_conf_threshold: float = 0.5
     garbage_bin_conf_threshold: float = 0.4
+    fire_conf_threshold: float = 0.15
+    smoke_conf_threshold: float = 0.30
     default_iou_threshold: float = 0.3
 
 

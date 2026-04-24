@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
@@ -225,12 +226,20 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
             except ValueError:
                 payload["result_video"] = Path(record.output_path).name
         if record.status == "completed":
+            video_info = record.video_info or ""
+            suppressed_alerts = 0
+            m = re.search(r"suppressed=(\d+)", video_info)
+            if m:
+                suppressed_alerts = int(m.group(1))
+            alert_types = record_service.get_video_alert_types(db, task_id)
             payload["stats"] = {
                 "total_frames": record.total_frames,
                 "detected_frames": record.detected_frames,
                 "total_detections": record.total_detections,
                 "total_alerts": record.total_alerts,
-                "video_info": record.video_info,
+                "suppressed_alerts": suppressed_alerts,
+                "alert_types": alert_types,
+                "video_info": video_info,
             }
         return payload
     @router.get("/alerts", response_model=AlertListResponse)
@@ -265,6 +274,13 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         if image_b64 is None:
             raise HTTPException(status_code=404, detail="Record not found")
         return {"image": image_b64}
+
+    @router.get("/alerts/{record_uid}/detail")
+    async def get_alert_detail(record_uid: str, db: Session = Depends(get_db)) -> dict:
+        payload = record_service.get_alert_detail(db, record_uid)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Record not found")
+        return payload
 
     @router.get("/statistics", response_model=StatisticsResponse)
     async def get_statistics(db: Session = Depends(get_db)) -> dict:

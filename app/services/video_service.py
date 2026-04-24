@@ -16,6 +16,8 @@ class VideoProcessingService:
     VIDEO_IOU_MATCH_THRESHOLD = 0.4
     VIDEO_GARBAGE_COOLDOWN_SECONDS = 3.0  # overflow/garbage
     VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS = 1.0  # fire/smoke
+    VIDEO_FIRE_SMOKE_MIN_CONFIRM_FRAMES = 2
+    VIDEO_FIRE_SMOKE_HIGH_CONF_BYPASS = 0.60
 
     def __init__(self, detection_service: DetectionService):
         self.detection_service = detection_service
@@ -56,13 +58,15 @@ class VideoProcessingService:
         detections: list[dict],
         current_ts: float,
         alert_history: list[dict],
-    ) -> list[dict]:
+    ) -> tuple[list[dict], int]:
         """
         Video-only cooldown:
         - overflow/garbage: same object won't re-alert within 3s
         - fire/smoke: same object won't re-alert within 1s
+        - same object match priority: track_id (stable) > bbox IoU fallback
         """
-        updated = []
+        updated: list[dict] = []
+        suppressed_count = 0
 
         for det in detections:
             item = det.copy()
@@ -77,11 +81,20 @@ class VideoProcessingService:
                 continue
 
             bbox = item.get("bbox", [])
+            track_id = item.get("track_id")
             has_recent_same_object = False
             for rec in alert_history:
                 if rec["class_id"] != class_id:
                     continue
                 if current_ts - rec["timestamp"] > cooldown:
+                    continue
+                # Prefer tracker identity match to avoid repeated alerts caused by
+                # bbox jitter on the same object across adjacent frames.
+                rec_tid = rec.get("track_id")
+                if (track_id is not None) and (rec_tid is not None):
+                    if int(track_id) == int(rec_tid):
+                        has_recent_same_object = True
+                        break
                     continue
                 if self._compute_iou(bbox, rec["bbox"]) >= self.VIDEO_IOU_MATCH_THRESHOLD:
                     has_recent_same_object = True
@@ -89,12 +102,14 @@ class VideoProcessingService:
 
             if has_recent_same_object:
                 item["alert"] = False
+                suppressed_count += 1
             else:
                 alert_history.append(
                     {
                         "class_id": class_id,
                         "bbox": bbox,
                         "timestamp": current_ts,
+                        "track_id": int(track_id) if track_id is not None else None,
                     }
                 )
             updated.append(item)
@@ -107,7 +122,7 @@ class VideoProcessingService:
         alert_history[:] = [
             rec for rec in alert_history if current_ts - rec["timestamp"] <= max_keep_window
         ]
-        return updated
+        return updated, suppressed_count
 
     def _attach_upgrade_metadata(
         self,
@@ -128,6 +143,45 @@ class VideoProcessingService:
             out.append(item)
 
         return out, len(alarms)
+
+    def _apply_fire_smoke_temporal_confirmation(
+        self,
+        detections: list[dict],
+        streak_state: dict[tuple[int, int], int],
+    ) -> list[dict]:
+        """
+        Keep fire/smoke alert only after the same tracked object appears
+        for enough consecutive processed frames.
+        """
+        active_keys: set[tuple[int, int]] = set()
+        out: list[dict] = []
+        for det in detections:
+            item = det.copy()
+            cid = int(item.get("class_id", -1))
+            if not item.get("alert", False) or cid not in (3, 4):
+                out.append(item)
+                continue
+
+            tid = item.get("track_id")
+            if tid is None:
+                item["alert"] = False
+                out.append(item)
+                continue
+
+            key = (cid, int(tid))
+            active_keys.add(key)
+            count = int(streak_state.get(key, 0)) + 1
+            streak_state[key] = count
+            conf = float(item.get("confidence", 0.0))
+            high_conf_bypass = conf >= self.VIDEO_FIRE_SMOKE_HIGH_CONF_BYPASS
+            if (not high_conf_bypass) and count < self.VIDEO_FIRE_SMOKE_MIN_CONFIRM_FRAMES:
+                item["alert"] = False
+            out.append(item)
+
+        for key in list(streak_state.keys()):
+            if key not in active_keys:
+                streak_state.pop(key, None)
+        return out
 
     def process_video(
         self,
@@ -150,10 +204,13 @@ class VideoProcessingService:
         frame_count = 0
         total_detections = 0
         total_alerts = 0
+        total_suppressed_alerts = 0
+        alert_type_set: set[str] = set()
         alert_frames = 0
         prev_result = None
         effective_skip = max(skip_frames, 1)
         alert_history: list[dict] = []
+        fire_smoke_streak: dict[tuple[int, int], int] = {}
         total_pipeline_alarms = 0
 
         writer = imageio.get_writer(
@@ -182,21 +239,29 @@ class VideoProcessingService:
 
                 detections = self.detection_service.detect(frame)
                 current_ts = (frame_count / fps) if fps > 0 else 0.0
-                detections = self._apply_video_alert_cooldown(
-                    detections=detections,
-                    current_ts=current_ts,
-                    alert_history=alert_history,
-                )
                 detections, pipeline_alarm_count = self._attach_upgrade_metadata(
                     detections,
                     timestamp=current_ts,
                 )
+                detections = self._apply_fire_smoke_temporal_confirmation(
+                    detections=detections,
+                    streak_state=fire_smoke_streak,
+                )
+                detections, suppressed_this_frame = self._apply_video_alert_cooldown(
+                    detections=detections,
+                    current_ts=current_ts,
+                    alert_history=alert_history,
+                )
+                total_suppressed_alerts += int(suppressed_this_frame)
                 total_pipeline_alarms += pipeline_alarm_count
 
                 rendered = self.detection_service.draw_boxes(frame, detections)
                 prev_result = rendered.copy()
 
                 frame_alerts = sum(1 for item in detections if item.get("alert", False))
+                for item in detections:
+                    if item.get("alert", False):
+                        alert_type_set.add(str(item.get("class_name", "unknown")))
                 if frame_alerts > 0:
                     alert_frames += 1
                 total_alerts += frame_alerts
@@ -220,6 +285,15 @@ class VideoProcessingService:
                     (0, 220, 255),
                     2,
                 )
+                cv2.putText(
+                    rendered,
+                    f"Suppressed: {total_suppressed_alerts}",
+                    (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (150, 220, 255),
+                    2,
+                )
                 writer.append_data(self._bgr_to_rgb(rendered))
 
                 if progress_callback and total_frames:
@@ -233,5 +307,7 @@ class VideoProcessingService:
             "detected_frames": alert_frames,
             "total_detections": total_detections,
             "total_alerts": total_alerts,
-            "video_info": f"{width}x{height}, {fps:.1f}fps",
+            "suppressed_alerts": total_suppressed_alerts,
+            "alert_types": sorted(alert_type_set),
+            "video_info": f"{width}x{height}, {fps:.1f}fps, suppressed={total_suppressed_alerts}",
         }

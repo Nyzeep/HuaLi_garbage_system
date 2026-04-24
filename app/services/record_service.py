@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+import re
 
 import cv2
 from sqlalchemy import func
@@ -57,6 +58,115 @@ class RecordService:
         db.commit()
         db.refresh(record)
         return record
+
+    def create_video_alert_summary_record(
+        self,
+        db: Session,
+        task_id: str,
+        stats: dict,
+    ) -> AlertRecord | None:
+        total_alerts = int(stats.get("total_alerts", 0) or 0)
+        if total_alerts <= 0:
+            return None
+
+        alert_types = [str(x) for x in (stats.get("alert_types") or [])]
+        status = "warning"
+        if any("火" in t for t in alert_types):
+            status = "fire"
+        elif any("烟" in t for t in alert_types):
+            status = "smoke"
+        elif any("溢出" in t for t in alert_types):
+            status = "overflow"
+
+        record = AlertRecord(
+            record_uid=f"v{task_id[:7]}",
+            status=status,
+            alert_types=alert_types,
+            total_detections=int(stats.get("total_detections", 0) or 0),
+            alert_count=total_alerts,
+            result_image_path=f"video_task:{task_id}",
+            source="video",
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        return record
+
+    def get_alert_detail(self, db: Session, record_uid: str) -> dict | None:
+        record = db.query(AlertRecord).filter(AlertRecord.record_uid == record_uid).first()
+        if record is None:
+            return None
+
+        payload: dict = {
+            "id": record.record_uid,
+            "source": record.source,
+            "status": record.status,
+            "types": record.alert_types or [],
+            "alert_count": int(record.alert_count or 0),
+            "total_detections": int(record.total_detections or 0),
+            "time": record.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        if record.source != "video":
+            image_b64 = self.get_alert_image_base64(db, record_uid)
+            payload["detail_type"] = "image"
+            payload["image"] = image_b64
+            return payload
+
+        task_id = ""
+        token = record.result_image_path or ""
+        if token.startswith("video_task:"):
+            task_id = token.split(":", 1)[1].strip()
+        elif record.record_uid.startswith("v") and len(record.record_uid) > 1:
+            prefix = record.record_uid[1:]
+            row = (
+                db.query(VideoTaskRecord)
+                .filter(VideoTaskRecord.task_id.like(f"{prefix}%"))
+                .order_by(VideoTaskRecord.updated_at.desc())
+                .first()
+            )
+            if row is not None:
+                task_id = row.task_id
+
+        task = None
+        if task_id:
+            task = db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
+
+        result_video = None
+        suppressed_alerts = 0
+        video_info = ""
+        stats = {
+            "total_frames": 0,
+            "detected_frames": 0,
+            "total_detections": 0,
+            "total_alerts": int(record.alert_count or 0),
+            "suppressed_alerts": 0,
+            "video_info": "",
+        }
+        if task is not None:
+            if task.output_path:
+                try:
+                    result_video = Path(task.output_path).relative_to(self.uploads_dir).as_posix()
+                except ValueError:
+                    result_video = Path(task.output_path).name
+            video_info = task.video_info or ""
+            m = re.search(r"suppressed=(\d+)", video_info)
+            if m:
+                suppressed_alerts = int(m.group(1))
+            stats = {
+                "total_frames": int(task.total_frames or 0),
+                "detected_frames": int(task.detected_frames or 0),
+                "total_detections": int(task.total_detections or 0),
+                "total_alerts": int(task.total_alerts or 0),
+                "suppressed_alerts": suppressed_alerts,
+                "video_info": video_info,
+            }
+
+        payload["detail_type"] = "video"
+        payload["task_id"] = task_id or None
+        payload["result_video"] = result_video
+        payload["stats"] = stats
+        return payload
 
     def list_alerts(self, db: Session, page: int, per_page: int, status: str) -> tuple[int, list[AlertRecord]]:
         query = db.query(AlertRecord).order_by(AlertRecord.created_at.desc())
@@ -180,6 +290,19 @@ class RecordService:
 
     def get_video_task(self, db: Session, task_id: str) -> VideoTaskRecord | None:
         return db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
+
+    def get_video_alert_types(self, db: Session, task_id: str) -> list[str]:
+        token = f"video_task:{task_id}"
+        record = (
+            db.query(AlertRecord)
+            .filter(AlertRecord.source == "video")
+            .filter(AlertRecord.result_image_path == token)
+            .order_by(AlertRecord.created_at.desc())
+            .first()
+        )
+        if record is None:
+            return []
+        return [str(x) for x in (record.alert_types or [])]
 
     def list_classes(self) -> dict:
         classes = [

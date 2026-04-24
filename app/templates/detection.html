@@ -1034,9 +1034,29 @@ function applyCompletedVideoResult(result) {
     });
   }
 
+  const alertTypeMap = {
+    overflow: { key: 'overflow', label: '垃圾溢出' },
+    garbage: { key: 'garbage', label: '散落垃圾' },
+    fire: { key: 'fire', label: '火焰' },
+    smoke: { key: 'smoke', label: '烟雾' },
+    video_alert: { key: 'warning', label: '视频预警' },
+    垃圾溢出: { key: 'overflow', label: '垃圾溢出' },
+    散落垃圾: { key: 'garbage', label: '散落垃圾' },
+    火焰: { key: 'fire', label: '火焰' },
+    烟雾: { key: 'smoke', label: '烟雾' },
+    视频预警: { key: 'warning', label: '视频预警' },
+  };
+  const rawTypes = Array.isArray(stats.alert_types) ? stats.alert_types : [];
+  const normalized = rawTypes
+    .map((t) => alertTypeMap[String(t)] || { key: 'warning', label: String(t) })
+    .filter((item) => item.label && item.label !== 'normal');
+  const uniqueLabels = [...new Set(normalized.map((item) => item.label))];
+  const primaryKey = normalized.length === 1 ? normalized[0].key : 'warning';
+  const reasonText = uniqueLabels.length > 0 ? uniqueLabels.join('、') : '历史任务未记录类型';
+
   addVideoResult({
-    class_id: stats.total_alerts > 0 ? 'warning' : 'normal',
-    class_name: stats.total_alerts > 0 ? '检测到异常，请查看回放' : '检测完成，未发现异常',
+    class_id: stats.total_alerts > 0 ? primaryKey : 'normal',
+    class_name: stats.total_alerts > 0 ? `检测到异常：${reasonText}` : '检测完成，未发现异常',
     confidence: 1,
     is_alert: stats.total_alerts > 0,
     frame: `${stats.total_frames || 0}`,

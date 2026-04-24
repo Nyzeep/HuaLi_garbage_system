@@ -6,6 +6,7 @@ cd /d "%~dp0"
 set "VENV_DIR="
 set "VENV_PYTHON="
 set "NEED_INSTALL=0"
+set "APP_PORT=8010"
 
 echo [1/4] Checking Python virtual environment...
 
@@ -85,27 +86,31 @@ if "!NEED_INSTALL!"=="1" (
     )
 )
 
-echo [2/3] Starting Celery Worker in background...
+echo [2/4] Cleaning stale backend processes...
+powershell -NoProfile -Command "$procs=Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'python.exe' -and $_.CommandLine -and (($_.CommandLine -like '*app.main:app*') -or ($_.CommandLine -like '*app.celery_app*')) }; foreach($proc in $procs){ try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop; Write-Output ('Stopped PID ' + $proc.ProcessId) } catch {} }"
+timeout /t 1 /nobreak >nul
+
+echo [3/4] Starting Celery Worker in background...
 for /f %%P in ('
     powershell -NoProfile -Command "$p=Start-Process -WindowStyle Hidden -FilePath '!VENV_PYTHON!' -ArgumentList @('-m','celery','-A','app.celery_app','worker','--loglevel=info','--pool=solo') -PassThru; $p.Id"
 ') do set "CELERY_PID=%%P"
 
 timeout /t 2 /nobreak >nul
 
-echo [3/3] Starting FastAPI Web in background...
+echo [4/4] Starting FastAPI Web in background...
 for /f %%P in ('
-    powershell -NoProfile -Command "$p=Start-Process -WindowStyle Hidden -FilePath '!VENV_PYTHON!' -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','8000','--reload') -PassThru; $p.Id"
+    powershell -NoProfile -Command "$p=Start-Process -WindowStyle Hidden -FilePath '!VENV_PYTHON!' -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port','!APP_PORT!') -PassThru; $p.Id"
 ') do set "UVICORN_PID=%%P"
 
 timeout /t 2 /nobreak >nul
-start "" http://127.0.0.1:8000
+start "" http://127.0.0.1:!APP_PORT!
 
 echo.
 echo Started successfully:
 echo - Virtual environment: !VENV_DIR!
 echo - Celery PID: !CELERY_PID!
 echo - Uvicorn PID: !UVICORN_PID!
-echo - Browser: http://127.0.0.1:8000
+echo - Browser: http://127.0.0.1:!APP_PORT!
 echo.
 echo Press any key to stop all services...
 pause >nul

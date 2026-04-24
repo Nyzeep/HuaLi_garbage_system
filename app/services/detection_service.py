@@ -64,6 +64,9 @@ class AlertCooldown:
 
 
 class DetectionService:
+    SMOKE_TOP_IGNORE_RATIO = 0.28
+    SMOKE_BOTTOM_IGNORE_RATIO = 0.16
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self.cooldown = AlertCooldown()
@@ -165,9 +168,15 @@ class DetectionService:
                 continue
 
             if bundle.key == "fire":
-                conf_threshold = 0.30
+                conf_threshold = self.settings.fire_conf_threshold
             elif bundle.key == "smoke":
-                conf_threshold = 0.15
+                # Smoke-model may output both smoke and fire classes.
+                # Use the lower class threshold at backend stage, then
+                # enforce class-specific thresholds after class mapping.
+                conf_threshold = min(
+                    self.settings.fire_conf_threshold,
+                    self.settings.smoke_conf_threshold,
+                )
             else:
                 conf_threshold = min(
                     self.settings.default_conf_threshold,
@@ -180,6 +189,12 @@ class DetectionService:
             ):
                 class_id = bundle.class_mapping.get(prediction.class_id)
                 if class_id is None:
+                    continue
+
+                # Fire/smoke use class-specific thresholds.
+                if class_id == 3 and prediction.confidence < self.settings.fire_conf_threshold:
+                    continue
+                if class_id == 4 and prediction.confidence < self.settings.smoke_conf_threshold:
                     continue
 
                 # Class-specific confidence:
@@ -210,7 +225,10 @@ class DetectionService:
                     },
                 )
 
-        return self._suppress_garbage_when_fire_overlaps(result_list)
+        result_list = self._promote_garbage_to_fire_by_color(image, result_list)
+        result_list = self._apply_fire_priority_over_garbage(result_list)
+        result_list = self._suppress_smoke_false_positives(image, result_list)
+        return self._classwise_nms(result_list, target_class_id=3, iou_threshold=0.35)
 
     @staticmethod
     def _iou(box_a: list[int], box_b: list[int]) -> float:
@@ -228,24 +246,167 @@ class DetectionService:
         union = area_a + area_b - inter_area
         return inter_area / union if union > 0 else 0.0
 
-    def _suppress_garbage_when_fire_overlaps(self, detections: list[dict]) -> list[dict]:
-        # If a scattered-garbage box heavily overlaps a fire box, prefer fire and drop garbage.
-        overlap_threshold = 0.35
+    def _apply_fire_priority_over_garbage(self, detections: list[dict]) -> list[dict]:
+        # Fire has higher priority than overflow/scattered-garbage when regions overlap.
+        overlap_threshold = 0.10
         fire_boxes = [d["bbox"] for d in detections if d["class_id"] == 3]
         if not fire_boxes:
             return detections
 
         filtered: list[dict] = []
         for det in detections:
-            if det["class_id"] != 2:
+            # Keep bins and fire/smoke; only suppress garbage-related alerts.
+            if det["class_id"] not in (1, 2):
                 filtered.append(det)
                 continue
 
-            has_near_fire = any(self._iou(det["bbox"], fire_box) >= overlap_threshold for fire_box in fire_boxes)
+            cx, cy = self._bbox_center(det["bbox"])
+            has_near_fire = any(
+                (self._iou(det["bbox"], fire_box) >= overlap_threshold)
+                or (fire_box[0] <= cx <= fire_box[2] and fire_box[1] <= cy <= fire_box[3])
+                for fire_box in fire_boxes
+            )
             if not has_near_fire:
                 filtered.append(det)
 
         return filtered
+
+    def _promote_garbage_to_fire_by_color(self, image: np.ndarray, detections: list[dict]) -> list[dict]:
+        """
+        Fallback: relabel scattered-garbage as fire when color cues strongly
+        indicate bright red/orange/yellow flames.
+        """
+        h, w = image.shape[:2]
+        out: list[dict] = []
+        for det in detections:
+            item = det.copy()
+            if int(item.get("class_id", -1)) != 2:
+                out.append(item)
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in item.get("bbox", [0, 0, 0, 0])]
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
+            area = bw * bh
+            if area < int(h * w * 0.01):
+                out.append(item)
+                continue
+
+            crop = image[y1:y2, x1:x2]
+            if crop.size == 0:
+                out.append(item)
+                continue
+
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            fire_mask = (
+                ((hsv[:, :, 0] <= 35) | (hsv[:, :, 0] >= 170))
+                & (hsv[:, :, 1] >= 110)
+                & (hsv[:, :, 2] >= 120)
+            )
+            fire_ratio = float(fire_mask.mean())
+            fire_pixels = int(fire_mask.sum())
+            # Two trigger paths:
+            # 1) high ratio for compact fire regions;
+            # 2) enough absolute fire-like pixels for large bounding boxes.
+            if (
+                float(item.get("confidence", 0.0)) >= 0.55
+                and (fire_ratio >= 0.22 or fire_pixels >= 5000)
+            ):
+                info = ALL_CLASSES[3]
+                item["class_id"] = 3
+                item["class_name"] = EVENT_NAME_OVERRIDE.get(3, info["name"])
+                item["alert"] = True
+                item["color"] = info["color"]
+                item["icon"] = info["icon"]
+                item["source_model"] = f"{item.get('source_model', 'garbage')}+fire_color_fallback"
+            out.append(item)
+        return out
+
+    def _suppress_smoke_false_positives(self, image: np.ndarray, detections: list[dict]) -> list[dict]:
+        """
+        Reduce common smoke false positives on slender, saturated objects
+        (e.g., red-white roadside bollards).
+        """
+        h, w = image.shape[:2]
+        top_ignore_px = int(h * self.SMOKE_TOP_IGNORE_RATIO)
+        bottom_ignore_px = int(h * (1.0 - self.SMOKE_BOTTOM_IGNORE_RATIO))
+        out: list[dict] = []
+        for det in detections:
+            if det["class_id"] != 4:  # smoke
+                out.append(det)
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
+            area = bw * bh
+
+            crop = image[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            mean_sat = float(hsv[:, :, 1].mean())
+
+            too_slender = (bh / bw) > 2.8
+            too_small = area < int(h * w * 0.004)
+            highly_saturated = mean_sat > 95.0
+            in_top_banner_zone = y2 <= top_ignore_px
+            in_bottom_blur_zone = y1 >= bottom_ignore_px
+            lower_confidence = float(det.get("confidence", 0.0)) < 0.75
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            texture_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            low_texture = texture_var < 24.0
+
+            # Suppress likely bollard-like false positives:
+            # small + very slender + strong saturation.
+            if too_small and too_slender and highly_saturated:
+                continue
+            # Suppress likely subtitle/banner false positives in the top area.
+            if in_top_banner_zone and lower_confidence:
+                continue
+            # Suppress likely bottom blur-bar false positives.
+            if in_bottom_blur_zone and (lower_confidence or low_texture):
+                continue
+
+            out.append(det)
+        return out
+
+    def _classwise_nms(
+        self,
+        detections: list[dict],
+        target_class_id: int,
+        iou_threshold: float = 0.35,
+    ) -> list[dict]:
+        """
+        Apply extra NMS on a specific class across model sources.
+        Useful for fire boxes where multiple detectors may overlap.
+        """
+        target = [d for d in detections if int(d.get("class_id", -1)) == target_class_id]
+        others = [d for d in detections if int(d.get("class_id", -1)) != target_class_id]
+        if len(target) <= 1:
+            return detections
+
+        target = sorted(target, key=lambda d: float(d.get("confidence", 0.0)), reverse=True)
+        kept: list[dict] = []
+        while target:
+            best = target.pop(0)
+            kept.append(best)
+            best_box = best.get("bbox", [0, 0, 0, 0])
+            remaining: list[dict] = []
+            for cand in target:
+                cand_box = cand.get("bbox", [0, 0, 0, 0])
+                if self._iou(best_box, cand_box) < iou_threshold:
+                    remaining.append(cand)
+            target = remaining
+        return others + kept
 
     def _attach_bin_color(self, image: np.ndarray, detections: list[dict]) -> list[dict]:
         if not self.bin_color_classifier.loaded:

@@ -64,6 +64,9 @@ def run_video_task(
             progress_callback=update_progress,
         )
 
+        # Write alert summary first so /api/tasks completed response can immediately
+        # return stable alert_types without front-end race.
+        record_service.create_video_alert_summary_record(db, task_id=task_id, stats=stats)
         record_service.update_video_task(
             db,
             task_id,
