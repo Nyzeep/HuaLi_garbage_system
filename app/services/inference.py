@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 import cv2
 import numpy as np
+
+
+def _ensure_ultralytics_config_dir() -> None:
+    """
+    Force Ultralytics to use a writable config directory inside project root.
+    This avoids permission issues on %APPDATA%/Ultralytics/settings.json.
+    """
+    project_root = Path(__file__).resolve().parents[2]
+    cfg_dir = project_root / ".ultralytics"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("YOLO_CONFIG_DIR", str(cfg_dir))
 
 
 @dataclass
@@ -65,6 +77,7 @@ class UltralyticsBackend:
             return
 
         try:
+            _ensure_ultralytics_config_dir()
             self._register_spd_compat()
             from ultralytics import YOLO
 
