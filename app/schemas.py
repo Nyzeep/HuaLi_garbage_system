@@ -14,6 +14,13 @@ class DetectionItem(BaseModel):
     alert: bool
     icon: str = ""
     source: str = ""
+    track_id: int | None = None
+    bin_color: str | None = None
+    bin_color_confidence: float | None = None
+    bin_type_key: str | None = None
+    bin_type_name: str | None = None
+    related_bin_type_key: str | None = None
+    related_bin_type_name: str | None = None
 
 
 class SceneInfo(BaseModel):
@@ -78,16 +85,25 @@ class StatisticsResponse(BaseModel):
     alert_record_count: int
 
 
+class RustStatus(BaseModel):
+    available: bool
+    healthy: bool
+    error: str | None = None
+    latency_ms: float | None = None
+
+
 class SystemStatusResponse(BaseModel):
     model_loaded: bool
     garbage_model: bool
     fire_model: bool
     smoke_model: bool
+    bin_color_model: bool = False
     mode: str
     uptime: str
     class_count: int
     version: str
     name: str
+    rust: RustStatus
 
 
 class VideoTaskCreateResponse(BaseModel):
@@ -104,7 +120,7 @@ class VideoTaskStatusResponse(BaseModel):
     progress: int
     message: str
     result_video: str | None = None
-    stats: dict[str, int | str] | None = None
+    stats: dict[str, int | str | list[str] | list[int]] | None = None
 
 
 class Base64ImageRequest(BaseModel):

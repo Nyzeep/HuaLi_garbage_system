@@ -11,7 +11,6 @@ celery_app = Celery(
     "garbage_system",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks"],
 )
 
 celery_app.conf.update(
@@ -23,4 +22,8 @@ celery_app.conf.update(
     enable_utc=False,
     task_always_eager=settings.celery_task_always_eager,
 )
+
+# Discover tasks lazily so Celery workers register `app.tasks.*` without
+# forcing `app.tasks` to import during unrelated module imports in tests.
+celery_app.autodiscover_tasks(["app"])
 

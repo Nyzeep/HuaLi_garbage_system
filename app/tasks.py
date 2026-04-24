@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -10,9 +12,8 @@ from app.bootstrap import bootstrap_application
 from app.celery_app import celery_app
 from app.config import get_settings
 from app.database import SessionLocal
-from app.services.detection_service import DetectionService
+from app.dependencies import get_video_processing_service
 from app.services.record_service import RecordService
-from app.services.video_service import VideoProcessingService
 
 
 logger = get_task_logger(__name__)
@@ -28,25 +29,57 @@ def run_video_task(
     bootstrap_application()
     db = SessionLocal()
     record_service = RecordService(settings.uploads_dir)
-    detection_service = DetectionService(settings=settings)
-    video_service = VideoProcessingService(detection_service=detection_service)
+    video_service = get_video_processing_service()
 
     input_file = Path(input_path)
     output_dir = settings.uploads_dir / "videos"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{input_file.stem}_detected.mp4"
 
+    progress_state = {"value": 5, "done": False}
+    progress_lock = threading.Lock()
+    task_started_at = time.time()
+
+    def write_progress(progress: int, message: str, *, notify_worker: bool = True) -> None:
+        progress_db = SessionLocal()
+        try:
+            progress_record_service = RecordService(settings.uploads_dir)
+            progress_record_service.update_video_task(
+                progress_db,
+                task_id,
+                status="processing",
+                progress=progress,
+                message=message,
+            )
+            logger.info("video task progress updated task_id=%s progress=%s message=%s", task_id, progress, message)
+        except Exception as exc:
+            logger.warning("video task progress update failed task_id=%s progress=%s error=%s", task_id, progress, exc)
+        finally:
+            progress_db.close()
+        if notify_worker and progress_callback is not None:
+            try:
+                progress_callback(progress)
+            except Exception as exc:
+                logger.warning("video task worker progress callback failed task_id=%s progress=%s error=%s", task_id, progress, exc)
+
+    def heartbeat() -> None:
+        while True:
+            with progress_lock:
+                if progress_state["done"]:
+                    return
+                progress = int(progress_state["value"])
+            elapsed = int(time.time() - task_started_at)
+            write_progress(progress, f"视频处理中 {progress}% ({elapsed}s)", notify_worker=False)
+            time.sleep(1)
+
     def update_progress(current_frame: int, total_frames: int) -> None:
-        progress = int((current_frame / max(total_frames, 1)) * 100)
-        record_service.update_video_task(
-            db,
-            task_id,
-            status="processing",
-            progress=progress,
-            message=f"视频处理中 {progress}%",
-        )
-        if progress_callback is not None:
-            progress_callback(progress)
+        progress = max(5, int((current_frame / max(total_frames, 1)) * 100))
+        with progress_lock:
+            progress_state["value"] = max(int(progress_state["value"]), progress)
+            progress = int(progress_state["value"])
+        write_progress(progress, f"视频处理中 {progress}%")
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
 
     try:
         record_service.update_video_task(
@@ -56,6 +89,7 @@ def run_video_task(
             progress=5,
             message="视频任务开始处理",
         )
+        heartbeat_thread.start()
 
         stats = video_service.process_video(
             input_path=input_file,
@@ -64,6 +98,10 @@ def run_video_task(
             progress_callback=update_progress,
         )
 
+        with progress_lock:
+            progress_state["done"] = True
+        if hasattr(record_service, "create_video_alert_summary_record"):
+            record_service.create_video_alert_summary_record(db, task_id=task_id, stats=stats)
         record_service.update_video_task(
             db,
             task_id,
@@ -84,6 +122,8 @@ def run_video_task(
 
         return {"task_id": task_id, "status": "completed", "result_video": output_path.name, "stats": stats}
     except Exception as exc:
+        with progress_lock:
+            progress_state["done"] = True
         logger.exception("video task failed: %s", task_id)
         record_service.update_video_task(
             db,

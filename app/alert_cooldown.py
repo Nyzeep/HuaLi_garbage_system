@@ -1,57 +1,58 @@
+from __future__ import annotations
 
-import time
-from threading import Lock
+import warnings
+from typing import Any
+
+from app.services.alert_policy_service import AlertPolicyService
 
 
 class AlertCooldown:
-
-
-    COOLDOWN_CONFIG = {
-
-        "default_garbage": 15 * 60,
-        "recyclable": 15 * 60,
-        "kitchen_waste": 15 * 60,
-        "hazardous": 15 * 60,
-        "other": 15 * 60,
-
-        "fire": 90,
-        "smoke": 90,
-    }
-
     def __init__(self):
-        self._last_alert_time = {}  
-        self._lock = Lock()
-
-    def _get_cooldown_seconds(self, category: str) -> int:
-
-
-        if category in self.COOLDOWN_CONFIG:
-            return self.COOLDOWN_CONFIG[category]
-
-        if "fire" in category.lower() or "smoke" in category.lower():
-            return 90
-        return self.COOLDOWN_CONFIG["default_garbage"]
+        warnings.warn(
+            "app.alert_cooldown.AlertCooldown is deprecated; use app.services.alert_policy_service.AlertPolicyService instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._service = AlertPolicyService()
 
     def can_alert(self, category: str) -> bool:
-
-
-        with self._lock:
-            now = time.time()
-            last = self._last_alert_time.get(category, 0)
-            cooldown = self._get_cooldown_seconds(category)
-            if now - last >= cooldown:
-
-                self._last_alert_time[category] = now
-                return True
-            else:
-                remaining = int(cooldown - (now - last))
-                print(f"[冷却抑制] 类别 '{category}' 还需等待 {remaining} 秒")
-                return False
+        category_map = {
+            "overflow": 1,
+            "garbage": 2,
+            "fire": 3,
+            "smoke": 4,
+        }
+        class_id = category_map.get(category.lower())
+        if class_id is None:
+            return True
+        return self._service.can_alert(class_id)
 
     def reset_category(self, category: str):
+        category_map = {
+            "overflow": 1,
+            "garbage": 2,
+            "fire": 3,
+            "smoke": 4,
+        }
+        class_id = category_map.get(category.lower())
+        if class_id is not None:
+            self._service._last_alert_time.pop(class_id, None)
 
-        with self._lock:
-            self._last_alert_time.pop(category, None)
 
 
-cooldown_manager = AlertCooldown()
+class _CooldownManagerProxy:
+    def __init__(self) -> None:
+        self._manager: AlertCooldown | None = None
+
+    def _get_manager(self) -> AlertCooldown:
+        if self._manager is None:
+            self._manager = AlertCooldown()
+        return self._manager
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._get_manager(), name)
+
+
+cooldown_manager = _CooldownManagerProxy()
+
+__all__ = ["AlertCooldown", "cooldown_manager"]

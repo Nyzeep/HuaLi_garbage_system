@@ -562,9 +562,12 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
 let selectedFile = null;
 let cameraStream = null;
 let autoDetectInterval = null;
+let cameraWs = null;
 let selectedVideo = null;
 let isDetectingVideo = false;
 let videoStartTime = null;
+let activeVideoEventSource = null;
+let activeVideoPollTimer = null;
 
 const classIconMap = {
   0: '🗑️',
@@ -767,6 +770,11 @@ function createResultCard(detection) {
   const badgeText = isAlert ? '预警' : '正常';
   const confidenceColor = isAlert ? 'bg-red-500' : 'bg-emerald-500';
   const icon = classIconMap[detection.class_id] || classIconMap[detection.class_name] || '📌';
+  const extraMeta = [];
+  if (typeof detection.track_id === 'number') extraMeta.push(`追踪ID: ${detection.track_id}`);
+  if (detection.bin_type_name) extraMeta.push(`桶类型: ${detection.bin_type_name}`);
+  else if (detection.bin_color) extraMeta.push(`桶颜色: ${detection.bin_color}`);
+  if (detection.related_bin_type_name) extraMeta.push(`关联桶: ${detection.related_bin_type_name}`);
 
   return `
     <div class="result-card p-4 rounded-xl ${bgColor} border fade-in">
@@ -786,6 +794,7 @@ function createResultCard(detection) {
           </div>
           ${Array.isArray(detection.bbox) ? `<div class="text-xs text-gray-400">位置: [${detection.bbox.join(', ')}]</div>` : ''}
           ${(detection.source || detection.source_model) ? `<div class="text-xs text-gray-400">来源: ${detection.source || detection.source_model}</div>` : ''}
+          ${extraMeta.map((item) => `<div class="text-xs text-gray-400">${item}</div>`).join('')}
         </div>
       </div>
     </div>
@@ -845,6 +854,9 @@ function toggleAutoDetect() {
   }
 }
 
+let cameraReconnectTimer = null;
+let cameraLastMessageAt = 0;
+
 function startAutoDetect() {
   if (!cameraStream) {
     const toggle = document.getElementById('auto-toggle');
@@ -852,29 +864,49 @@ function startAutoDetect() {
     alert('请先启动摄像头');
     return;
   }
+  if (cameraWs && cameraWs.readyState === WebSocket.OPEN) return;
 
-  if (autoDetectInterval) {
-    return;
-  }
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  cameraWs = new WebSocket(`${proto}://${location.host}/api/ws/camera`);
 
-  autoDetectInterval = setInterval(() => {
-    captureAndDetect();
-  }, 1000);
+  cameraWs.onopen = () => {
+    cameraLastMessageAt = Date.now();
+    autoDetectInterval = setInterval(captureAndDetect, 1000);
+  };
+
+  cameraWs.onmessage = (event) => {
+    cameraLastMessageAt = Date.now();
+    let data;
+    try { data = JSON.parse(event.data); } catch { return; }
+    if (data.error) { console.error('摄像头检测失败:', data.error); return; }
+    setLoading(false);
+    if (Array.isArray(data.detections) && data.detections.length === 0) {
+      document.getElementById('results-list').innerHTML = '<div class="text-sm text-gray-500">当前帧未检测到目标，或模型未加载。</div>';
+      return;
+    }
+    displayResults(data);
+  };
+
+  cameraWs.onerror = () => {
+    console.error('WebSocket 连接失败');
+    stopAutoDetect(false);
+    cameraReconnectTimer = setTimeout(startAutoDetect, 1000);
+  };
+
+  cameraWs.onclose = () => {
+    cameraWs = null;
+    if (autoDetectInterval) { clearInterval(autoDetectInterval); autoDetectInterval = null; }
+  };
 }
 
-function stopAutoDetect() {
-  if (!autoDetectInterval) {
-    return;
-  }
-  clearInterval(autoDetectInterval);
-  autoDetectInterval = null;
+function stopAutoDetect(clearReconnect = true) {
+  if (autoDetectInterval) { clearInterval(autoDetectInterval); autoDetectInterval = null; }
+  if (clearReconnect && cameraReconnectTimer) { clearTimeout(cameraReconnectTimer); cameraReconnectTimer = null; }
+  if (cameraWs) { cameraWs.close(); cameraWs = null; }
 }
 
 function captureAndDetect() {
-  if (!cameraStream) {
-    alert('请先启动摄像头');
-    return;
-  }
+  if (!cameraStream || !cameraWs || cameraWs.readyState !== WebSocket.OPEN) return;
 
   const video = document.getElementById('camera-video');
   const canvas = document.getElementById('camera-canvas');
@@ -883,8 +915,8 @@ function captureAndDetect() {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(video, 0, 0);
 
-  const imageData = canvas.toDataURL('image/jpeg', 0.85);
-  detectBase64(imageData);
+  setLoading(true);
+  cameraWs.send(JSON.stringify({ image: canvas.toDataURL('image/jpeg', 0.85) }));
 }
 
 function handleVideoSelect(event) {
@@ -942,6 +974,7 @@ async function startVideoDetection() {
 
   isDetectingVideo = true;
   videoStartTime = Date.now();
+  document.getElementById('video-stat-duration').textContent = '0s';
 
   document.getElementById('video-btn-start').classList.add('hidden');
   document.getElementById('video-btn-stop').classList.remove('hidden');
@@ -965,7 +998,9 @@ async function startVideoDetection() {
       throw new Error(submitData.error || submitData.message || '视频任务提交失败');
     }
 
-    await pollVideoTaskStatus(submitData.task_id);
+    const completedTask = await watchVideoTaskStatus(submitData.task_id);
+    applyCompletedVideoResult(completedTask);
+    finalizeVideoDetectionUi(true);
   } catch (error) {
     console.error('视频检测失败:', error);
     addVideoResult({
@@ -980,36 +1015,85 @@ async function startVideoDetection() {
   }
 }
 
-async function pollVideoTaskStatus(taskId) {
-  while (isDetectingVideo) {
-    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.error || result.message || '任务状态查询失败');
-    }
+async function fetchVideoTaskStatus(taskId) {
+  const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+  if (!response.ok) throw new Error('任务状态查询失败');
+  return response.json();
+}
 
-    const progress = Math.max(0, Math.min(100, Number(result.progress || 0)));
-    document.getElementById('video-progress-percent').textContent = `${progress}%`;
-    document.getElementById('video-progress-bar').style.width = `${progress}%`;
-    document.getElementById('video-progress-text').textContent = result.message || `处理中 ${progress}%`;
-    document.getElementById('video-processing-text').textContent = result.message || '处理中...';
+function watchVideoTaskStatus(taskId) {
+  return new Promise((resolve, reject) => {
+    let reconnectTimer = null;
+    let settled = false;
 
-    if (videoStartTime) {
-      const elapsed = Math.floor((Date.now() - videoStartTime) / 1000);
-      document.getElementById('video-stat-duration').textContent = `${elapsed}s`;
-    }
+    const cleanup = () => {
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      activeVideoEventSource = null;
+    };
 
-    if (result.status === 'completed') {
-      applyCompletedVideoResult(result);
-      finalizeVideoDetectionUi(true);
-      return;
-    }
-    if (result.status === 'failed') {
-      throw new Error(result.message || '视频处理失败');
-    }
+    const openStream = () => {
+      const es = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
+      activeVideoEventSource = es;
 
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-  }
+      es.onmessage = (event) => {
+        let result;
+        try { result = JSON.parse(event.data); } catch { return; }
+
+        const progress = Math.max(0, Math.min(100, Number(result.progress || 0)));
+        document.getElementById('video-progress-percent').textContent = `${progress}%`;
+        document.getElementById('video-progress-bar').style.width = `${progress}%`;
+        document.getElementById('video-progress-text').textContent = result.message || `处理中 ${progress}%`;
+        document.getElementById('video-processing-text').textContent = result.message || '处理中...';
+        if (typeof result.elapsed_seconds === 'number') {
+          document.getElementById('video-stat-duration').textContent = `${result.elapsed_seconds}s`;
+        }
+
+
+        if (result.status === 'completed') {
+          settled = true;
+          es.close();
+          cleanup();
+          resolve(result);
+        } else if (result.status === 'failed') {
+          settled = true;
+          es.close();
+          cleanup();
+          reject(new Error(result.message || '视频处理失败'));
+        }
+      };
+
+      es.addEventListener('error', async (event) => {
+        es.close();
+        if (settled) {
+          cleanup();
+          return;
+        }
+        try {
+          const latest = await fetchVideoTaskStatus(taskId);
+          if (latest.status === 'completed') {
+            settled = true;
+            cleanup();
+            resolve(latest);
+            return;
+          }
+          if (latest.status === 'failed') {
+            settled = true;
+            cleanup();
+            reject(new Error(latest.message || '视频处理失败'));
+            return;
+          }
+          reconnectTimer = setTimeout(openStream, 1000);
+        } catch {
+          reconnectTimer = setTimeout(openStream, 1000);
+        }
+      });
+    };
+
+    openStream();
+  });
 }
 
 function applyCompletedVideoResult(result) {
@@ -1034,9 +1118,29 @@ function applyCompletedVideoResult(result) {
     });
   }
 
+  const alertTypeMap = {
+    overflow: { key: 'overflow', label: '垃圾溢出' },
+    garbage: { key: 'garbage', label: '散落垃圾' },
+    fire: { key: 'fire', label: '火焰' },
+    smoke: { key: 'smoke', label: '烟雾' },
+    video_alert: { key: 'warning', label: '视频预警' },
+    垃圾溢出: { key: 'overflow', label: '垃圾溢出' },
+    散落垃圾: { key: 'garbage', label: '散落垃圾' },
+    火焰: { key: 'fire', label: '火焰' },
+    烟雾: { key: 'smoke', label: '烟雾' },
+    视频预警: { key: 'warning', label: '视频预警' }
+  };
+  const rawTypes = Array.isArray(stats.alert_types) ? stats.alert_types : [];
+  const normalized = rawTypes
+    .map((t) => alertTypeMap[String(t)] || { key: 'warning', label: String(t) })
+    .filter((item) => item.label && item.label !== 'normal');
+  const uniqueLabels = [...new Set(normalized.map((item) => item.label))];
+  const primaryKey = normalized.length === 1 ? normalized[0].key : 'warning';
+  const reasonText = uniqueLabels.length > 0 ? uniqueLabels.join('、') : '历史任务未记录类型';
+
   addVideoResult({
-    class_id: stats.total_alerts > 0 ? 'warning' : 'normal',
-    class_name: stats.total_alerts > 0 ? '检测到异常，请查看回放' : '检测完成，未发现异常',
+    class_id: stats.total_alerts > 0 ? primaryKey : 'normal',
+    class_name: stats.total_alerts > 0 ? `检测到异常：${reasonText}` : '检测完成，未发现异常',
     confidence: 1,
     is_alert: stats.total_alerts > 0,
     frame: `${stats.total_frames || 0}`,
@@ -1048,12 +1152,15 @@ function stopVideoDetection() {
     return;
   }
   isDetectingVideo = false;
+  if (activeVideoEventSource) { activeVideoEventSource.close(); activeVideoEventSource = null; }
   finalizeVideoDetectionUi();
-  document.getElementById('video-processing-text').textContent = '已停止前端轮询，后台任务可能仍在继续';
+  document.getElementById('video-processing-text').textContent = '已停止，后台任务可能仍在继续';
 }
 
 function finalizeVideoDetectionUi(completed = false) {
   isDetectingVideo = false;
+  if (activeVideoPollTimer) { clearInterval(activeVideoPollTimer); activeVideoPollTimer = null; }
+  if (activeVideoEventSource) { activeVideoEventSource.close(); activeVideoEventSource = null; }
 
   const video = document.getElementById('video-player');
   if (!completed) {
