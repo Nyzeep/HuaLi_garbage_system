@@ -46,9 +46,11 @@ class Settings(BaseSettings):
     smoke_onnx_model: Path = BASE_DIR / "models" / "fire_smoke.onnx"
     bin_color_resnet18_model: Path = BASE_DIR / "models" / "bin_color_resnet18.pt"
     bin_color_min_confidence: float = 0.4
+    # For combined smoke/fire models, default mapping is usually:
+    # class 0 = smoke, class 1 = fire.
     smoke_model_include_fire: bool = True
-    smoke_model_fire_class_id: int = 0
-    smoke_model_smoke_class_id: int = 1
+    smoke_model_fire_class_id: int = 1
+    smoke_model_smoke_class_id: int = 0
 
     default_conf_threshold: float = 0.5
     garbage_bin_conf_threshold: float = 0.4

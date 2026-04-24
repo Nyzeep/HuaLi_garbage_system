@@ -73,22 +73,9 @@ class DetectionService:
         self.detectors = self._build_detectors()
         self.bin_color_classifier = ResNet18BinColorService(settings.bin_color_resnet18_model)
 
-    @staticmethod
-    def _cuda_available() -> bool:
-        try:
-            import torch
-
-            return bool(torch.cuda.is_available())
-        except Exception:
-            return False
-
     def _select_backend(self, onnx_path: Path, pt_path: Path) -> InferenceBackend | None:
-        # When CUDA is available, prefer PT backend to ensure GPU inference.
-        if self._cuda_available():
-            pt_backend = UltralyticsBackend(pt_path)
-            if pt_backend.loaded:
-                return pt_backend
-
+        # Current strategy: prefer ONNXRuntime first (CUDA provider when available),
+        # fallback to Ultralytics PT only when ONNX model is unavailable.
         onnx_backend = OnnxYoloBackend(onnx_path)
         if onnx_backend.loaded:
             return onnx_backend
@@ -159,6 +146,12 @@ class DetectionService:
         return self._fake_detect(image)
 
     def _run_models(self, image: np.ndarray) -> list[dict]:
+        """
+        Unified detection pipeline:
+        1) run detector backends and map model class IDs to system class IDs
+        2) apply per-class confidence/area filtering
+        3) apply post rules (fire fallback, fire priority, smoke suppression, fire NMS)
+        """
         result_list: list[dict] = []
         h, w = image.shape[:2]
         min_box_area = w * h * 0.005
