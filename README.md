@@ -205,6 +205,8 @@ CELERY_TASK_ALWAYS_EAGER=false
 
 ### 方式一：Windows 一键启动
 
+双击目录下start_queue.bat,或者通过以下命令行执行
+
 ```bat
 start_queue.bat
 ```
