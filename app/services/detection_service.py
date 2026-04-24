@@ -70,7 +70,22 @@ class DetectionService:
         self.detectors = self._build_detectors()
         self.bin_color_classifier = ResNet18BinColorService(settings.bin_color_resnet18_model)
 
+    @staticmethod
+    def _cuda_available() -> bool:
+        try:
+            import torch
+
+            return bool(torch.cuda.is_available())
+        except Exception:
+            return False
+
     def _select_backend(self, onnx_path: Path, pt_path: Path) -> InferenceBackend | None:
+        # When CUDA is available, prefer PT backend to ensure GPU inference.
+        if self._cuda_available():
+            pt_backend = UltralyticsBackend(pt_path)
+            if pt_backend.loaded:
+                return pt_backend
+
         onnx_backend = OnnxYoloBackend(onnx_path)
         if onnx_backend.loaded:
             return onnx_backend

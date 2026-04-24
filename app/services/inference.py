@@ -20,6 +20,17 @@ def _ensure_ultralytics_config_dir() -> None:
     os.environ.setdefault("YOLO_CONFIG_DIR", str(cfg_dir))
 
 
+def _preferred_torch_device() -> str:
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda:0"
+    except Exception:
+        pass
+    return "cpu"
+
+
 @dataclass
 class RawPrediction:
     class_id: int
@@ -72,6 +83,7 @@ class UltralyticsBackend:
         self.model_path = model_path
         self.loaded = False
         self._model = None
+        self.device = _preferred_torch_device()
 
         if not model_path.exists():
             return
@@ -120,7 +132,13 @@ class UltralyticsBackend:
         if not self.loaded or self._model is None:
             return []
 
-        output = self._model(image, conf=conf_threshold, iou=iou_threshold, verbose=False)[0]
+        output = self._model(
+            image,
+            conf=conf_threshold,
+            iou=iou_threshold,
+            verbose=False,
+            device=self.device,
+        )[0]
         predictions: list[RawPrediction] = []
         for box in output.boxes:
             class_id = int(box.cls[0])
@@ -139,6 +157,7 @@ class OnnxYoloBackend:
         self.model_path = model_path
         self.loaded = False
         self._session = None
+        self.providers: list[str] = []
         self._input_name = ""
         self._input_hw = (640, 640)
 
@@ -148,8 +167,12 @@ class OnnxYoloBackend:
         try:
             import onnxruntime as ort
 
+            available = set(ort.get_available_providers())
             providers = ["CPUExecutionProvider"]
+            if "CUDAExecutionProvider" in available:
+                providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
             self._session = ort.InferenceSession(str(model_path), providers=providers)
+            self.providers = list(self._session.get_providers())
             model_input = self._session.get_inputs()[0]
             self._input_name = model_input.name
             input_shape = model_input.shape
