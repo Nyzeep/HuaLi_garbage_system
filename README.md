@@ -35,6 +35,7 @@
 - 多入口检测：支持图片上传检测、Base64 图像检测、视频上传检测。
 - 风险场景覆盖：围绕社区垃圾桶、满溢、散落垃圾、火情等巡检场景构建识别能力。
 - 双后端推理：优先使用 ONNX Runtime，必要时自动回退到 Ultralytics 权重推理。
+- 桶体细粒度识别：支持对垃圾桶目标补充颜色分类结果，便于后续做桶型关联与展示。
 - 视频任务编排：支持 Celery 异步处理，也支持在本地线程中自动兜底执行。
 - 结果可追踪：预警截图、检测记录、视频任务状态均可落库保存。
 - 可视化展示：内置首页、综合检测页、视频页、预警页、统计页、数据集说明页。
@@ -97,9 +98,9 @@
 ```text
 garbage_system/
 ├── app/
-│   ├── api/                # 页面路由与 API 路由
-│   ├── models/             # 模型权重与导出的 ONNX 文件
-│   ├── services/           # 检测、视频、记录服务
+│   ├── api/                # 页面路由与检测/统计/任务接口
+│   ├── models/             # 检测模型、分类模型与训练产物
+│   ├── services/           # 检测、视频、记录、桶体颜色服务
 │   ├── templates/          # Jinja2 前端页面
 │   ├── upgrade/            # 跟踪与时序告警升级流水线
 │   ├── bootstrap.py        # 启动初始化
@@ -107,11 +108,15 @@ garbage_system/
 │   ├── config.py           # 项目配置
 │   ├── constants.py        # 类别常量
 │   ├── database.py         # 数据库连接
+│   ├── dependencies.py     # 依赖注入与服务装配
 │   ├── db_models.py        # ORM 模型
 │   ├── main.py             # FastAPI 入口
 │   ├── schemas.py          # Pydantic 响应模型
-│   └── tasks.py            # 视频异步任务
-├── dataset/                # 当前仓库内保留的数据集目录
+│   ├── tasks.py            # 视频异步任务
+│   └── utils.py            # 图像/Base64/路径等通用工具
+├── tools/                  # 数据预标注与人工复标辅助脚本
+├── .env.example            # 环境变量示例
+├── garbage_system.db       # 本地 SQLite 数据库
 ├── start_queue.bat         # Windows 一键启动脚本
 ├── requirements.txt
 └── README.md
@@ -129,6 +134,7 @@ garbage_system/
 
 - `app/services/inference.py`：封装 ONNX Runtime 与 Ultralytics 双推理后端
 - `app/services/detection_service.py`：检测主逻辑、场景分析、绘框渲染
+- `app/services/bin_color_service.py`：基于 ResNet18 的垃圾桶颜色分类服务
 - `app/services/video_service.py`：逐帧处理、告警冷却、视频统计
 - `app/tasks.py`：视频任务异步执行封装
 
@@ -146,12 +152,19 @@ garbage_system/
 - `app/upgrade/alarm.py`：连续帧告警规则
 - `app/upgrade/detection.py`：检测结果适配器
 
+### 数据辅助工具
+
+- `tools/prelabel_garbage_bin.py`：使用检测模型批量预标注垃圾桶框，生成 YOLO 标签
+- `tools/quick_relabel_tool.py`：基于 OpenCV 的快速人工复标工具，适合颜色分类数据清洗
+
 ## 模型与推理策略
 
 项目配置以 `app/config.py` 为准，当前主流程采用多模型组合方式工作：
 
 - 垃圾相关模型：`app/models/garbege.onnx` / `app/models/garbege.pt`
 - 火情相关模型：`app/models/only_fire.onnx` / `app/models/only_fire.pt`
+- 烟雾相关模型：`app/models/fire_smoke.onnx` / `app/models/fire_smoke.pt`
+- 桶体颜色分类模型：`app/models/bin_color_resnet18.pt`
 - 其余模型资源与数据展示内容保留在仓库中，便于后续扩展、展示与实验
 
 推理策略如下：
@@ -217,7 +230,7 @@ start_queue.bat
 2. 自动创建 `.venv`（如不存在）
 3. 自动安装缺失依赖
 4. 启动 Celery Worker
-5. 启动 FastAPI Web 服务并打开浏览器
+5. 启动 FastAPI Web 服务并打开浏览器（默认访问 `http://127.0.0.1:8010`）
 
 ### 方式二：手动启动
 
@@ -287,6 +300,7 @@ GET /api/tasks/{task_id}
 ```http
 GET /api/alerts
 GET /api/alerts/{record_uid}/image
+GET /api/alerts/{record_uid}/detail
 GET /api/statistics
 GET /api/status
 GET /api/classes
