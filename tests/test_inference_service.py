@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from app.core.constants import ALL_CLASSES
+from app.constants import ALL_CLASSES
 from app.infrastructure.ml.model_registry import ModelBundle, ModelDescriptor, ModelRegistry
 from app.services.inference_service import InferenceService
 
@@ -21,6 +21,7 @@ class DummyBackend:
         self._predictions = predictions
         self.loaded = loaded
         self.calls: list[dict] = []
+        self.batch_calls: list[dict] = []
 
     def predict(self, *, image, conf_threshold: float, iou_threshold: float):
         self.calls.append(
@@ -31,6 +32,16 @@ class DummyBackend:
             }
         )
         return self._predictions
+
+    def predict_batch(self, images, conf_threshold: float, iou_threshold: float):
+        self.batch_calls.append(
+            {
+                "batch_size": len(images),
+                "conf_threshold": conf_threshold,
+                "iou_threshold": iou_threshold,
+            }
+        )
+        return [self._predictions for _ in images]
 
 
 def build_registry(*bundles: tuple[str, DummyBackend | None, dict[int, int] | None]) -> ModelRegistry:
@@ -114,7 +125,7 @@ def test_detect_single_loaded_model_maps_fields_correctly():
     image = np.zeros((12, 10, 3), dtype=np.uint8)
     detections = service.detect(image)
 
-    assert backend.calls == [{"image_shape": (12, 10, 3), "conf_threshold": 0.5, "iou_threshold": 0.3}]
+    assert backend.calls == [{"image_shape": (12, 10, 3), "conf_threshold": 0.35, "iou_threshold": 0.3}]
     assert detections == [
         {
             "class_id": 2,
@@ -144,7 +155,9 @@ def test_detect_multiple_loaded_models_merges_results():
     assert len(detections) == 2
     assert {det["source_model"] for det in detections} == {"garbage", "fire"}
     assert {det["class_id"] for det in detections} == {0, 3}
-    assert all(call["conf_threshold"] == 0.5 and call["iou_threshold"] == 0.3 for call in garbage_backend.calls + fire_backend.calls)
+    assert garbage_backend.calls[0]["conf_threshold"] == 0.35
+    assert fire_backend.calls[0]["conf_threshold"] == 0.5
+    assert all(call["iou_threshold"] == 0.3 for call in garbage_backend.calls + fire_backend.calls)
 
 
 def test_detect_ignores_unloaded_backends():
@@ -162,3 +175,63 @@ def test_detect_ignores_unloaded_backends():
     assert len(detections) == 1
     assert detections[0]["class_id"] == 4
     assert unloaded_backend.calls == []
+
+
+def test_detect_dedupes_cross_model_overlaps(monkeypatch):
+    backend_a = DummyBackend([DummyPrediction(class_id=0, confidence=0.9, bbox=[0, 0, 10, 10])])
+    backend_b = DummyBackend([DummyPrediction(class_id=3, confidence=0.8, bbox=[0, 0, 10, 10])])
+    registry = build_registry(("garbage", backend_a, {0: 0}), ("fire", backend_b, {3: 3}))
+    service = InferenceService(registry)
+
+    monkeypatch.setattr(service, "_dedupe_cross_model_results", lambda detections: detections[:1])
+
+    detections = service.detect(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    assert len(detections) == 1
+
+
+def test_detect_batch_returns_per_image_results():
+    backend = DummyBackend([DummyPrediction(class_id=0, confidence=0.9, bbox=[0, 0, 10, 10])])
+    registry = build_registry(("garbage", backend, {0: 0}))
+    service = InferenceService(registry)
+
+    images = [np.zeros((8, 8, 3), dtype=np.uint8), np.zeros((8, 8, 3), dtype=np.uint8)]
+    results = service.detect_batch(images)
+
+    assert len(results) == 2
+    assert all(len(batch) == 1 for batch in results)
+    assert backend.batch_calls == [{"batch_size": 2, "conf_threshold": 0.35, "iou_threshold": 0.3}]
+    assert backend.calls == []
+
+
+def test_detect_uses_adaptive_conf_threshold_for_garbage(monkeypatch):
+    backend = DummyBackend([DummyPrediction(class_id=0, confidence=0.91, bbox=[1, 2, 3, 4])])
+    registry = build_registry(("garbage", backend, {0: 2}))
+    service = InferenceService(registry)
+    monkeypatch.setattr(service._settings, "garbage_bin_conf_threshold", 0.42)
+    monkeypatch.setattr(service._settings, "adaptive_conf_floor", 0.35)
+    monkeypatch.setattr(service._settings, "adaptive_conf_ceiling", 0.7)
+
+    service.detect(np.zeros((8, 8, 3), dtype=np.uint8))
+
+    assert backend.calls[0]["conf_threshold"] == 0.42
+
+
+def test_dedupe_cross_model_results_keeps_highest_confidence_box(monkeypatch):
+    registry = ModelRegistry()
+    service = InferenceService(registry)
+
+    detections = [
+        {"bbox": [0, 0, 10, 10], "confidence": 0.9, "source_model": "a", "class_id": 0},
+        {"bbox": [0, 0, 10, 10], "confidence": 0.8, "source_model": "b", "class_id": 3},
+    ]
+
+    monkeypatch.setattr(service, "_dedupe_cross_model_results", InferenceService._dedupe_cross_model_results.__get__(service, InferenceService))
+    monkeypatch.setattr(
+        "app.infrastructure.ml.rust_bridge.RustBridge.non_max_suppression",
+        lambda self, boxes, threshold: [boxes[0]],
+    )
+
+    result = service._dedupe_cross_model_results(detections)
+
+    assert result == [detections[0]]

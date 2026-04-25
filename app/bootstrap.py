@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import socket
+from urllib.parse import urlparse
 
 from app.celery_app import celery_app
 from app.config import get_settings
@@ -24,10 +26,13 @@ def _configure_logging() -> None:
 
 
 def _probe_redis() -> dict:
+    settings = get_settings()
+    parsed = urlparse(settings.redis_url)
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
     try:
-        with celery_app.connection_for_read() as connection:
-            connection.ensure_connection(max_retries=0)
-        return {"ok": True, "error": None}
+        with socket.create_connection((host, port), timeout=0.2):
+            return {"ok": True, "error": None}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -50,6 +55,7 @@ def _log_startup_summary() -> None:
             "key": bundle.descriptor.key,
             "loaded": bundle.loaded,
             "backend": type(bundle.backend).__name__ if bundle.backend is not None else None,
+            "supports_batch": getattr(bundle.backend, "_supports_batch", None) if bundle.backend is not None else None,
             "onnx_path": str(bundle.descriptor.onnx_path),
             "pt_path": str(bundle.descriptor.pt_path),
         }

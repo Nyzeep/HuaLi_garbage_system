@@ -25,4 +25,3 @@ mypy>=1.18.1
 hypothesis>=6.0.0
 types-requests>=2.32.0
 types-PyYAML>=6.0.12.20250915
-maturin>=1.8.0

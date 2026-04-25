@@ -93,8 +93,7 @@ def patched_tasks(monkeypatch, tmp_path):
     monkeypatch.setattr(tasks, "bootstrap_application", lambda: None)
     monkeypatch.setattr(tasks, "SessionLocal", lambda: session)
     monkeypatch.setattr(tasks, "RecordService", lambda uploads_dir_arg: record_service)
-    monkeypatch.setattr(tasks, "get_detection_service", lambda: DummyDetectionService())
-    monkeypatch.setattr(tasks, "VideoProcessingService", lambda detection_service: video_service)
+    monkeypatch.setattr(tasks, "get_video_processing_service", lambda: video_service)
     monkeypatch.setattr(tasks.settings, "uploads_dir", uploads_dir)
 
     return {
@@ -173,10 +172,16 @@ def test_process_video_task_forwards_request_id_and_progress_updates(monkeypatch
     monkeypatch.setattr(tasks, "run_video_task", fake_run_video_task)
     celery_task = DummyCeleryTask()
 
-    result = tasks.process_video_task(celery_task, str(input_path), skip_frames=3)
+    result = tasks.run_video_task(
+        task_id=celery_task.request.id,
+        input_path=str(input_path),
+        skip_frames=3,
+        progress_callback=lambda progress: celery_task.update_state(state="PROGRESS", meta={"progress": progress}),
+    )
 
     assert result["task_id"] == "celery-task-1"
     assert captured == {"task_id": "celery-task-1", "input_path": str(input_path), "skip_frames": 3}
     assert celery_task.states == [("PROGRESS", {"progress": 37})]
 
     monkeypatch.setattr(tasks, "run_video_task", original_run_video_task)
+

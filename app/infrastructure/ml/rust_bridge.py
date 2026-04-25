@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
+
+from app.core.geometry import compute_iou
 
 try:
     import requests
@@ -148,6 +151,166 @@ class RustBridge:
             return result if isinstance(result, list) else None
         except Exception as exc:
             logger.exception("rust http %s failed error=%s", path, exc)
+            return None
+
+    def invert_letterbox_bbox(
+        self,
+        bbox: list[int],
+        *,
+        scale: float,
+        pad_w: float,
+        pad_h: float,
+        original_width: int,
+        original_height: int,
+    ) -> list[int] | None:
+        transform_tuple = (scale, pad_w, pad_h, original_width, original_height)
+        transform_payload = {
+            "scale": scale,
+            "pad_w": pad_w,
+            "pad_h": pad_h,
+            "original_width": original_width,
+            "original_height": original_height,
+        }
+        try:
+            if self._can_use_pyo3() and _rust_native is not None:
+                result = _rust_native.invert_letterbox_bbox_py(
+                    bbox,
+                    transform_tuple,
+                )
+                return list(result)
+            result = self._http_call(
+                "/v1/invert-letterbox",
+                {
+                    "bbox": {"x1": bbox[0], "y1": bbox[1], "x2": bbox[2], "y2": bbox[3]},
+                    "transform": transform_payload,
+                },
+                "bbox",
+            )
+            if isinstance(result, dict):
+                return [result["x1"], result["y1"], result["x2"], result["y2"]]
+            return None
+        except Exception as exc:
+            logger.exception("rust invert_letterbox_bbox failed error=%s", exc)
+            return None
+
+    def batch_iou_match(
+        self,
+        left: list[list[int]],
+        right: list[list[int]],
+        threshold: float,
+    ) -> list[tuple[int, int, float]] | None:
+        try:
+            if self._can_use_pyo3() and _rust_native is not None:
+                result = _rust_native.batch_iou_match_py(left, right, threshold)
+                return [(int(item[0]), int(item[1]), float(item[2])) for item in result]
+            result = self._http_call(
+                "/v1/batch-iou-match",
+                {
+                    "left": [{"x1": box[0], "y1": box[1], "x2": box[2], "y2": box[3]} for box in left],
+                    "right": [{"x1": box[0], "y1": box[1], "x2": box[2], "y2": box[3]} for box in right],
+                    "threshold": threshold,
+                },
+                "matches",
+            )
+            return [
+                (int(item[0]), int(item[1]), float(item[2]))
+                for item in result
+            ] if result is not None else None
+        except Exception as exc:
+            logger.exception("rust batch_iou_match failed error=%s", exc)
+            return None
+
+    @staticmethod
+    def _is_finite_score(item: dict[str, Any]) -> bool:
+        score = item.get("score")
+        if score is None:
+            return False
+        try:
+            return math.isfinite(float(score))
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _python_non_max_suppression(boxes: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]]:
+        ordered = sorted(boxes, key=lambda item: float(item["score"]), reverse=True)
+        kept: list[dict[str, Any]] = []
+        for candidate in ordered:
+            if any(compute_iou(candidate["bbox"], existing["bbox"]) >= threshold for existing in kept):
+                continue
+            kept.append(candidate)
+        return kept
+
+    def non_max_suppression(self, boxes: list[dict[str, Any]], threshold: float) -> list[dict[str, Any]] | None:
+        sanitized_boxes = [
+            {"bbox": list(item["bbox"]), "score": float(item["score"])}
+            for item in boxes
+            if self._is_finite_score(item)
+        ]
+        try:
+            if self._can_use_pyo3() and _rust_native is not None:
+                native_boxes = [(item["bbox"], item["score"]) for item in sanitized_boxes]
+                result = _rust_native.non_max_suppression_py(native_boxes, threshold)
+                return [
+                    {"bbox": list(item[0]), "score": float(item[1])}
+                    for item in result
+                ]
+            result = self._http_call(
+                "/v1/nms",
+                {
+                    "boxes": [
+                        {
+                            "bbox": {
+                                "x1": item["bbox"][0],
+                                "y1": item["bbox"][1],
+                                "x2": item["bbox"][2],
+                                "y2": item["bbox"][3],
+                            },
+                            "score": item["score"],
+                        }
+                        for item in sanitized_boxes
+                    ],
+                    "threshold": threshold,
+                },
+                "boxes",
+            )
+            if result is not None:
+                return [
+                    {
+                        "bbox": [item["bbox"]["x1"], item["bbox"]["y1"], item["bbox"]["x2"], item["bbox"]["y2"]],
+                        "score": float(item["score"]),
+                    }
+                    for item in result
+                ]
+        except Exception as exc:
+            logger.exception("rust non_max_suppression failed error=%s", exc)
+        return self._python_non_max_suppression(sanitized_boxes, threshold)
+
+    def perceptual_hash(self, grayscale_pixels: list[int], width: int, height: int) -> int | None:
+        try:
+            if self._can_use_pyo3() and _rust_native is not None:
+                return int(_rust_native.perceptual_hash_py(grayscale_pixels, width, height))
+            result = self._http_call(
+                "/v1/perceptual-hash",
+                {"grayscale_pixels": grayscale_pixels, "width": width, "height": height},
+                "hash",
+            )
+            return int(result) if result is not None else None
+        except Exception as exc:
+            logger.exception("rust perceptual_hash failed error=%s", exc)
+            return None
+
+    def hamming_distance(self, a: int, b: int) -> int | None:
+        try:
+            if self._can_use_pyo3() and _rust_native is not None:
+                return int(_rust_native.hamming_distance_py(a, b))
+            result = self._http_call(
+                "/v1/hamming-distance",
+                {"a": a, "b": b},
+                "distance",
+            )
+            return int(result) if result is not None else None
+        except Exception as exc:
+            logger.exception("rust hamming_distance failed error=%s", exc)
             return None
 
     def filter_boxes(self, boxes: list[list[int]], threshold: float) -> list[list[int]] | None:

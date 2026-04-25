@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 
@@ -28,9 +28,9 @@ def build_pages_router(templates: Jinja2Templates) -> APIRouter:
     async def page_dataset(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request=request, name="dataset.html")
 
-    @router.get("/video", response_class=HTMLResponse)
-    async def page_video(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request=request, name="video.html")
+    @router.get("/video", include_in_schema=False)
+    async def page_video() -> RedirectResponse:
+        return RedirectResponse(url="/detection", status_code=307)
 
     return router
 

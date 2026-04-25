@@ -1,12 +1,14 @@
 # 测试覆盖清单
 
 > 本文档用于汇总当前项目的测试覆盖范围，方便快速了解各模块的回归保护情况、已验证的关键能力以及后续可继续补强的方向。
+>
+> 当前 `tests/` 目录共包含 **30 个测试文件**，覆盖从底层算法、服务编排、数据持久化、统计分析，到 API、SSE / WebSocket、视频任务链路、配置验证、兼容层、Celery 任务注册等多个层次。
 
 ---
 
 ## 1. 测试概览
 
-当前 `tests/` 目录已覆盖项目的主要核心链路，测试类型包括：
+当前测试类型包括：
 
 - **单元测试**：独立函数和类的行为验证
 - **服务层测试**：业务逻辑编排和依赖协作
@@ -16,6 +18,9 @@
 - **数据库统计与并发场景测试**：数据一致性和并发安全
 - **Rust 桥接层测试**：跨语言调用和回退机制
 - **属性测试（Hypothesis）**：随机输入下的稳定性验证
+- **配置与常量测试**：配置项默认值、路径解析、常量语义验证
+- **兼容层测试**：历史兼容层的委托行为与无模型安全行为
+- **Celery 任务注册测试**：异步任务注册与发现验证
 
 ### 1.1 测试文件清单
 
@@ -39,6 +44,18 @@
 | `tests/test_record_service.py` | 记录持久化服务 | 单元测试 + 数据库 |
 | `tests/test_statistics_service.py` | 统计计算服务 | 单元测试 + 数据库 |
 | `tests/test_concurrency.py` | 并发写入场景 | 并发测试 |
+| `tests/test_detector.py` | 旧 detector 兼容层与无模型安全行为 | 兼容性测试 |
+| `tests/test_legacy_compat.py` | 旧 cooldown / inference 兼容层委托行为 | 兼容性测试 |
+| `tests/test_video_service_alert_history.py` | 视频告警历史裁剪与容量上限 | 单元测试 |
+| `tests/test_backends_postprocess.py` | ONNX 后处理与坐标反算 | 单元测试 |
+| `tests/test_celery_task_registration.py` | Celery 任务注册与发现 | 集成测试 |
+| `tests/test_config_model_paths.py` | 配置项模型路径与遗留兼容 | 单元测试 |
+| `tests/test_constants_bin_types.py` | 垃圾分类常量语义 | 单元测试 |
+| `tests/test_onnx_iobinding.py` | ONNX Runtime IOBinding 加速路径 | 单元测试 + Mock |
+| `tests/test_runtime_paths.py` | 运行时目录路径解析 | 单元测试 |
+| `tests/test_rust_geometry_utils.py` | Rust 坐标反算与批量 IoU 匹配 | 单元测试 + Mock |
+| `tests/test_rust_nms_and_phash.py` | Rust scored NMS 与感知哈希 | 单元测试 + Mock |
+| `tests/test_video_micro_batching.py` | 视频微批大小自适应调整 | 单元测试 |
 
 ---
 
@@ -84,12 +101,14 @@ assert_raises(ValidationError, validate_upload_size, b"x" * (201 * 1024 * 1024),
 - 同一目标在冷却窗口内重复触发的抑制行为
 - 不同类别 / 不同位置目标的独立性
 - 内存历史缓存的更新与清理机制
+- 本地状态文件持久化与重启恢复
 
 **测试重点：**
 
 - 同类重复告警是否被正确抑制
 - 冷却窗口到期后是否恢复触发
 - 历史记录的自动裁剪策略
+- 状态文件加载与过期清理
 
 **场景覆盖：**
 
@@ -134,9 +153,11 @@ fire > smoke > overflow > general_alert > normal
 
 **覆盖内容：**
 
-- 无可用模型时返回空结果（演示模式）
+- 无可用模型时返回空结果（无随机演示检测，避免虚假告警）
 - 单模型推理结果映射正确性
 - 多模型并行推理结果合并逻辑
+- 多模型结果跨模型去重逻辑
+- 分模型自适应置信度阈值
 - 忽略未加载后端的过滤机制
 - `class_mapping` 重映射功能
 - `source_model` 标识保留
@@ -285,10 +306,13 @@ fire > smoke > overflow > general_alert > normal
 - 遮挡丢失与恢复机制
 - 跟踪队列清理策略
 - IoU 匹配逻辑（阈值 0.3）
+- Kalman 滤波器初始化与预测/校正路径
+- Rust 批量 IoU 匹配回退到 Python 路径
 
 **测试重点：**
 
 - ID 稳定性（同一目标跨帧 ID 不变）
+- Kalman 追踪器初始化与预测/校正路径
 - 丢帧恢复能力（最多 10 帧）
 - 追踪器状态迁移正确性
 
@@ -364,7 +388,87 @@ active -> lost (连续未匹配) -> removed (超过阈值)
 
 ---
 
-### 2.14 记录服务
+### 2.14 Rust 几何工具
+
+#### `tests/test_rust_geometry_utils.py`
+
+**覆盖内容：**
+
+- `invert_letterbox_bbox()` 坐标反算正确性
+- `batch_iou_match()` 批量 IoU 匹配行为
+- 边界参数传递与结果解析
+
+**测试重点：**
+
+- 坐标反算数学正确性
+- 批量匹配结果格式一致性
+
+**Mock 策略：**
+
+- 使用 DummyRustBridge 模拟 Rust 几何接口，验证 Python 侧调用逻辑与参数传递
+
+---
+
+### 2.15 Rust NMS 与感知哈希
+
+#### `tests/test_rust_nms_and_phash.py`
+
+**覆盖内容：**
+
+- `non_max_suppression()` scored NMS 去重行为
+- `perceptual_hash()` 感知哈希输出一致性
+- `hamming_distance()` 汉明距离计算正确性
+
+**测试重点：**
+
+- NMS 在高重叠场景下的置信度优先保留逻辑
+- 感知哈希对微小像素变化的敏感度
+
+**Mock 策略：**
+
+- 使用 DummyRustBridge 模拟 NMS 与哈希接口，验证上层调用逻辑
+
+---
+
+### 2.16 ONNX 后端后处理
+
+#### `tests/test_backends_postprocess.py`
+
+**覆盖内容：**
+
+- ONNX 模型输出后处理中的坐标映射正确性
+- letterbox 预处理后的坐标反算回原始图像空间
+- 置信度阈值过滤行为
+
+**测试重点：**
+
+- 后处理输出的 `bbox` 坐标是否准确映射到原始图像空间
+- 置信度过滤边界行为
+
+---
+
+### 2.17 ONNX IOBinding 加速路径
+
+#### `tests/test_onnx_iobinding.py`
+
+**覆盖内容：**
+
+- `OnnxYoloBackend` 在支持 IOBinding 时优先使用 `run_with_iobinding`
+- IOBinding 失败时自动回退到 `session.run()`
+- 固定批量模型在 `predict_batch()` 中逐帧回退处理
+
+**测试重点：**
+
+- IOBinding 成功路径与回退路径的正确切换
+- 批量推理在固定输入形状模型上的兼容性处理
+
+**Mock 策略：**
+
+- Mock `onnxruntime.InferenceSession` 的 `io_binding()`、`run_with_iobinding()`、`run()` 方法
+
+---
+
+### 2.18 记录服务
 
 #### `tests/test_record_service.py`
 
@@ -384,7 +488,7 @@ active -> lost (连续未匹配) -> removed (超过阈值)
 
 ---
 
-### 2.15 统计服务
+### 2.19 统计服务
 
 #### `tests/test_statistics_service.py`
 
@@ -403,7 +507,7 @@ active -> lost (连续未匹配) -> removed (超过阈值)
 
 ---
 
-### 2.16 并发场景
+### 2.20 并发场景
 
 #### `tests/test_concurrency.py`
 
@@ -428,7 +532,7 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 
 ---
 
-### 2.17 视频任务调度层
+### 2.21 视频任务调度层
 
 #### `tests/test_video_task_integration.py`
 
@@ -449,7 +553,7 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 
 ---
 
-### 2.18 视频处理链路集成
+### 2.22 视频处理链路集成
 
 #### `tests/test_video_pipeline_integration.py`
 
@@ -466,6 +570,135 @@ with ThreadPoolExecutor(max_workers=10) as executor:
 - 视频逐帧主链路完整性
 - 输出结果正确性
 - 升级流水线的附加语义
+
+---
+
+### 2.23 视频告警历史管理
+
+#### `tests/test_video_service_alert_history.py`
+
+**覆盖内容：**
+
+- `alert_history` 时间窗口裁剪机制
+- 每类告警历史容量上限控制
+- 长视频处理下历史列表无界增长防护
+
+**测试重点：**
+
+- 历史记录过期清理的时效性
+- 容量上限触发的丢弃策略
+
+---
+
+### 2.24 视频微批处理
+
+#### `tests/test_video_micro_batching.py`
+
+**覆盖内容：**
+
+- `_adaptive_micro_batch_size()` 根据检测/告警密度动态调整微批大小
+- 静态场景（无检测、无告警）下扩大微批以提升吞吐
+- 告警场景下缩小微批以降低延迟
+
+**测试重点：**
+
+- 微批大小切换边界正确性
+- 自适应策略的灵敏度
+
+---
+
+### 2.25 配置与模型路径
+
+#### `tests/test_config_model_paths.py`
+
+**覆盖内容：**
+
+- `Settings.garbage_int8_onnx_model` 默认路径拼写正确性（`garbage.int8.onnx`）
+- 遗留拼写 `garbege.int8.onnx` 的自动回退机制
+
+**测试重点：**
+
+- 配置默认值准确性
+- 遗留兼容路径的透明回退
+
+---
+
+### 2.26 运行时路径
+
+#### `tests/test_runtime_paths.py`
+
+**覆盖内容：**
+
+- `uploads_dir` 默认指向 `RUNTIME_DIR / "uploads"`
+- 运行时目录与仓库目录的隔离性
+
+**测试重点：**
+
+- 路径解析一致性
+- 开发与生产环境路径隔离
+
+---
+
+### 2.27 垃圾分类常量
+
+#### `tests/test_constants_bin_types.py`
+
+**覆盖内容：**
+
+- `BIN_TYPES` 中各类别语义正确性
+- 可回收/有害/厨余/其他垃圾桶故意共享同一 `class_id`（0）的设计意图
+- 溢出告警独立 `class_id`（1）
+
+**测试重点：**
+
+- 常量语义与设计意图一致性
+- UI 展示类别与检测类别的映射正确性
+
+---
+
+### 2.28 Celery 任务注册
+
+#### `tests/test_celery_task_registration.py`
+
+**覆盖内容：**
+
+- `process_video_task` 是否在 Celery 应用自动发现后正确注册
+- 任务名称完整路径验证
+
+**测试重点：**
+
+- 异步任务注册完整性
+- 自动发现机制有效性
+
+---
+
+### 2.29 历史兼容层
+
+#### `tests/test_detector.py`
+
+**覆盖内容：**
+
+- 旧 `detector.py` 兼容层在无模型时的安全行为
+- 彻底移除 `_fake_detect()` 后不再生成随机检测结果
+- 返回空结果避免虚假告警污染数据库
+
+**测试重点：**
+
+- 无模型安全模式语义正确性
+- 兼容层委托行为稳定性
+
+#### `tests/test_legacy_compat.py`
+
+**覆盖内容：**
+
+- 旧 `alert_cooldown.py` 委托 `AlertPolicyService` 的行为
+- 旧 `inference.py` 委托 `InferenceService` / `backends.py` 的行为
+- `DeprecationWarning` 正确发出
+
+**测试重点：**
+
+- 兼容层委托链路的完整性
+- 废弃警告提示有效性
 
 ---
 
@@ -539,14 +772,21 @@ pytest --durations=10
 | 图像渲染 | ⭐⭐⭐⭐⭐ | 副作用控制、绘制验证完整 |
 | 场景分析 | ⭐⭐⭐⭐⭐ | 优先级、统计验证完整 |
 | 视频冷却策略 | ⭐⭐⭐⭐⭐ | 分组冷却、历史维护完整 |
-| 追踪器 | ⭐⭐⭐⭐⭐ | ID 稳定性、恢复能力完整 |
+| 追踪器 | ⭐⭐⭐⭐⭐ | ID 稳定性、Kalman 路径、恢复能力完整 |
 | 连续帧告警 | ⭐⭐⭐⭐⭐ | 阈值、多目标验证完整 |
 | Rust 桥接 | ⭐⭐⭐⭐☆ | HTTP 路径覆盖，PyO3 需补充 |
+| Rust 几何/NMS/哈希 | ⭐⭐⭐⭐☆ | Mock 覆盖上层调用，真实 Rust 路径需补充 |
 | API 检测接口 | ⭐⭐⭐⭐⭐ | 端点、响应结构完整 |
 | SSE / WebSocket | ⭐⭐⭐⭐☆ | 基础交互覆盖，复杂场景可补充 |
 | 视频任务调度 | ⭐⭐⭐⭐⭐ | 生命周期、状态同步完整 |
 | 记录与统计服务 | ⭐⭐⭐⭐⭐ | CRUD、统计口径完整 |
 | 并发写入 | ⭐⭐⭐⭐☆ | 基础并发覆盖，高并发可补充 |
+| ONNX 后处理/IOBinding | ⭐⭐⭐⭐⭐ | 坐标反算、加速路径、回退逻辑完整 |
+| 配置与常量 | ⭐⭐⭐⭐⭐ | 路径解析、遗留兼容、常量语义完整 |
+| 兼容层 | ⭐⭐⭐⭐⭐ | 无模型安全、委托行为完整 |
+| Celery 任务注册 | ⭐⭐⭐⭐⭐ | 任务发现与注册验证完整 |
+| 视频微批处理 | ⭐⭐⭐⭐⭐ | 自适应策略边界验证完整 |
+| 视频告警历史 | ⭐⭐⭐⭐⭐ | 时间窗口裁剪、容量上限验证完整 |
 
 ### 4.2 仍可继续增强的部分
 
@@ -558,6 +798,8 @@ pytest --durations=10
 | `RecordService` 大数据量测试 | 低 | 百万级记录分页与统计性能 |
 | 真实模型推理集成测试 | 低 | 轻量级模型验证推理链路 |
 | PyO3 直接调用测试 | 中 | 补充 PyO3 路径的专项测试 |
+| ResNet18 颜色分类测试 | 中 | 补充 bin_color_service 的单元测试与 Mock 测试 |
+| 视频编码器自动选择测试 | 低 | 验证硬件编码器回退逻辑 |
 
 ---
 
@@ -627,6 +869,12 @@ python benchmarks/rust_call_path_benchmark.py --batch-size 32 --iterations 2000
 2. **真实依赖**：使用真实数据库、Redis（测试实例）
 3. **环境隔离**：测试数据不污染生产环境
 
+### 6.4 兼容性测试原则
+
+1. **委托验证**：确保兼容层正确委托到新实现
+2. **行为不变性**：兼容层不应改变原有行为的语义
+3. **废弃提示**：兼容层应发出适当的 `DeprecationWarning`
+
 ---
 
 ## 7. 建议的后续补测方向
@@ -645,26 +893,35 @@ python benchmarks/rust_call_path_benchmark.py --batch-size 32 --iterations 2000
    - 验证端到端处理流程
    - 检查输出视频质量
 
+3. **ResNet18 颜色分类测试**
+   - 验证 `BinColorService` 的模型加载与预测路径
+   - 验证分类标签映射正确性
+   - Mock 测试置信度过滤逻辑
+
 ### 7.2 中优先级
 
-3. **WebSocket 压力测试**
+4. **WebSocket 压力测试**
    - 长时间连接稳定性
    - 高频消息处理能力
    - 并发连接支持
 
-4. **模型加载失败场景**
+5. **模型加载失败场景**
    - ONNX 加载失败回退到 PT
    - 所有模型加载失败的演示模式
    - 模型热切换
 
+6. **视频编码器自动选择测试**
+   - 模拟硬件编码器不可用场景
+   - 验证 `libx264` 回退路径
+
 ### 7.3 低优先级
 
-5. **前端 E2E 测试**
+7. **前端 E2E 测试**
    - 页面加载与交互
    - 文件上传流程
    - 实时检测结果展示
 
-6. **性能回归测试**
+8. **性能回归测试**
    - 基准测试结果固化
    - CI 中自动性能对比
    - 性能下降告警
@@ -673,16 +930,16 @@ python benchmarks/rust_call_path_benchmark.py --batch-size 32 --iterations 2000
 
 ## 8. 结论
 
-当前项目测试已经覆盖从底层算法、服务编排、数据持久化、统计分析，到 API、SSE / WebSocket、视频任务链路的多个层次，具备较完整的回归保护能力。
+当前项目测试已经覆盖从底层算法、服务编排、数据持久化、统计分析，到 API、SSE / WebSocket、视频任务链路、配置验证、兼容层、Celery 任务注册的多个层次，具备较完整的回归保护能力。
 
 ### 质量评估
 
 | 维度 | 评分 | 说明 |
 |---|---|---|
-| 完整性 | 90/100 | 核心链路覆盖充分，部分边界场景可补充 |
+| 完整性 | 92/100 | 核心链路覆盖充分，新增 ONXX 后处理、配置验证、常量语义、微批处理、告警历史等均已覆盖；部分边界场景可补充 |
 | 准确性 | 95/100 | 测试断言准确，Mock 使用合理 |
-| 可维护性 | 85/100 | 测试结构清晰，部分复杂测试可拆分 |
+| 可维护性 | 87/100 | 测试结构清晰，部分复杂测试可拆分 |
 | 执行速度 | 80/100 | 大部分测试快速，集成测试可优化 |
-| 文档化 | 90/100 | 测试意图明确，注释充分 |
+| 文档化 | 92/100 | 测试意图明确，注释充分，test.md 与代码结构同步 |
 
-**总体评价**：对于以演示和研究验证为主的系统来说，当前测试覆盖已经相当完整；后续若继续强化真实视频回归、PyO3 路径测试，以及高并发场景测试，整体稳定性与性能评估能力还可以进一步提升。
+**总体评价**：对于以演示和研究验证为主的系统来说，当前测试覆盖已经相当完整；后续若继续强化真实视频回归、PyO3 路径测试、ResNet18 颜色分类测试，以及高并发场景测试，整体稳定性与性能评估能力还可以进一步提升。

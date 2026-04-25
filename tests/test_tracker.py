@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -121,6 +122,41 @@ def test_track_moved_box_keeps_id():
     # Slightly moved — IoU still > 0.3
     t2 = engine.update([make_det([5, 5, 105, 105])])
     assert t1[0].track_id == t2[0].track_id
+
+
+def test_track_initializes_kalman_filter():
+    engine = TrackEngine()
+    tracks = engine.update([make_det([0, 0, 100, 100])])
+    assert tracks[0].kalman is not None
+
+
+def test_kalman_uses_grouped_cv_state_layout():
+    kalman = TrackEngine._create_kalman([10, 20, 30, 40])
+    expected_transition = np.array(
+        [
+            [1, 0, 0, 0, 1, 0, 0, 0],
+            [0, 1, 0, 0, 0, 1, 0, 0],
+            [0, 0, 1, 0, 0, 0, 1, 0],
+            [0, 0, 0, 1, 0, 0, 0, 1],
+            [0, 0, 0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 0, 0, 1],
+        ],
+        dtype=np.float32,
+    )
+    expected_measurement = np.array(
+        [
+            [1, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0, 0, 0],
+        ],
+        dtype=np.float32,
+    )
+
+    assert np.array_equal(kalman.transitionMatrix, expected_transition)
+    assert np.array_equal(kalman.measurementMatrix, expected_measurement)
 
 
 def test_track_cross_class_no_match():
@@ -246,3 +282,27 @@ def test_track_ids_are_positive(det_specs):
     tracks = engine.update(dets)
     for tr in tracks:
         assert tr.track_id >= 1
+
+
+def test_track_prefers_rust_batch_iou_match_when_available():
+    class DummyRustBridge:
+        def batch_iou_match(self, left, right, threshold):
+            return [(0, 0, 0.9)]
+
+    engine = TrackEngine(rust_bridge=DummyRustBridge())
+    first = engine.update([make_det([0, 0, 100, 100])])
+    second = engine.update([make_det([5, 5, 105, 105])])
+
+    assert first[0].track_id == second[0].track_id
+
+
+def test_track_falls_back_to_python_when_rust_batch_iou_returns_none():
+    class DummyRustBridge:
+        def batch_iou_match(self, left, right, threshold):
+            return None
+
+    engine = TrackEngine(rust_bridge=DummyRustBridge())
+    first = engine.update([make_det([0, 0, 100, 100])])
+    second = engine.update([make_det([5, 5, 105, 105])])
+
+    assert first[0].track_id == second[0].track_id

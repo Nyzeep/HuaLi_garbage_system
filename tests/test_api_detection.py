@@ -99,6 +99,9 @@ class DummyRecordService:
     def list_alerts(self, db, page, per_page, status):
         return 0, []
 
+    def get_video_alert_types(self, db, task_id):
+        return None
+
     def get_alert_image_base64(self, db, record_uid):
         return "fake-image"
 

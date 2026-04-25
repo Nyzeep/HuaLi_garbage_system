@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use huali_garbage_core::{dedupe_track_events, filter_overlapping_boxes, iou, BBox, TrackEvent};
+use huali_garbage_core::{batch_iou_match, dedupe_track_events, filter_overlapping_boxes, hamming_distance, invert_letterbox_bbox, iou, perceptual_hash, BBox, LetterboxTransform, ScoredBBox, TrackEvent};
 use serde::{Deserialize, Serialize};
 use std::{env, net::SocketAddr};
 
@@ -41,9 +41,66 @@ struct FilterBoxesRequest {
     threshold: f64,
 }
 
+#[derive(Debug, Deserialize)]
+struct NmsRequest {
+    boxes: Vec<ScoredBBox>,
+    threshold: f64,
+}
+
 #[derive(Debug, Serialize)]
 struct FilterBoxesResponse {
     boxes: Vec<BBox>,
+}
+
+#[derive(Debug, Serialize)]
+struct NmsResponse {
+    boxes: Vec<ScoredBBox>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PerceptualHashRequest {
+    grayscale_pixels: Vec<u8>,
+    width: usize,
+    height: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct PerceptualHashResponse {
+    hash: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct HammingDistanceRequest {
+    a: u64,
+    b: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct HammingDistanceResponse {
+    distance: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct InvertLetterboxRequest {
+    bbox: BBox,
+    transform: LetterboxTransform,
+}
+
+#[derive(Debug, Serialize)]
+struct InvertLetterboxResponse {
+    bbox: BBox,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchIouMatchRequest {
+    left: Vec<BBox>,
+    right: Vec<BBox>,
+    threshold: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchIouMatchResponse {
+    matches: Vec<(usize, usize, f64)>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -82,6 +139,11 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/iou", post(compute_iou))
+        .route("/v1/invert-letterbox", post(invert_letterbox))
+        .route("/v1/batch-iou-match", post(batch_iou_match_route))
+        .route("/v1/perceptual-hash", post(perceptual_hash_route))
+        .route("/v1/hamming-distance", post(hamming_distance_route))
+        .route("/v1/nms", post(nms_route))
         .route("/v1/filter-boxes", post(filter_boxes))
         .route("/v1/dedupe-events", post(dedupe_events))
         .with_state(state);
@@ -113,6 +175,62 @@ async fn compute_iou(
     validate_bbox(payload.b)?;
     Ok(Json(IouResponse {
         value: iou(payload.a, payload.b),
+    }))
+}
+
+async fn invert_letterbox(
+    Json(payload): Json<InvertLetterboxRequest>,
+) -> Result<Json<InvertLetterboxResponse>, (StatusCode, Json<ErrorResponse>)> {
+    validate_bbox(payload.bbox)?;
+    Ok(Json(InvertLetterboxResponse {
+        bbox: invert_letterbox_bbox(payload.bbox, payload.transform),
+    }))
+}
+
+async fn batch_iou_match_route(
+    Json(payload): Json<BatchIouMatchRequest>,
+) -> Result<Json<BatchIouMatchResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !(0.0..=1.0).contains(&payload.threshold) {
+        return Err(bad_request("threshold must be between 0 and 1"));
+    }
+    for bbox in &payload.left {
+        validate_bbox(*bbox)?;
+    }
+    for bbox in &payload.right {
+        validate_bbox(*bbox)?;
+    }
+    Ok(Json(BatchIouMatchResponse {
+        matches: batch_iou_match(payload.left, payload.right, payload.threshold),
+    }))
+}
+
+async fn perceptual_hash_route(
+    Json(payload): Json<PerceptualHashRequest>,
+) -> Result<Json<PerceptualHashResponse>, (StatusCode, Json<ErrorResponse>)> {
+    Ok(Json(PerceptualHashResponse {
+        hash: perceptual_hash(payload.grayscale_pixels, payload.width, payload.height),
+    }))
+}
+
+async fn hamming_distance_route(
+    Json(payload): Json<HammingDistanceRequest>,
+) -> Result<Json<HammingDistanceResponse>, (StatusCode, Json<ErrorResponse>)> {
+    Ok(Json(HammingDistanceResponse {
+        distance: hamming_distance(payload.a, payload.b),
+    }))
+}
+
+async fn nms_route(
+    Json(payload): Json<NmsRequest>,
+) -> Result<Json<NmsResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if !(0.0..=1.0).contains(&payload.threshold) {
+        return Err(bad_request("threshold must be between 0 and 1"));
+    }
+    for item in &payload.boxes {
+        validate_bbox(item.bbox)?;
+    }
+    Ok(Json(NmsResponse {
+        boxes: huali_garbage_core::non_max_suppression(payload.boxes, payload.threshold),
     }))
 }
 

@@ -211,6 +211,115 @@ def test_dedupe_events_returns_none_when_payload_missing_fields(caplog):
     assert "timestamp_ms" in caplog.text
 
 
+def test_invert_letterbox_bbox_uses_pyo3_and_returns_bbox():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.invert_letterbox_bbox_py.return_value = (10, 20, 30, 40)
+        result = bridge.invert_letterbox_bbox(
+            [20, 40, 60, 80],
+            scale=2.0,
+            pad_w=10.0,
+            pad_h=20.0,
+            original_width=100,
+            original_height=100,
+        )
+
+    rust_native.invert_letterbox_bbox_py.assert_called_once_with(
+        [20, 40, 60, 80],
+        (2.0, 10.0, 20.0, 100, 100),
+    )
+    assert result == [10, 20, 30, 40]
+
+
+def test_batch_iou_match_uses_pyo3_and_returns_matches():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.batch_iou_match_py.return_value = [(0, 1, 0.75)]
+        result = bridge.batch_iou_match([[0, 0, 10, 10]], [[5, 5, 15, 15], [0, 0, 10, 10]], 0.3)
+
+    assert result == [(0, 1, 0.75)]
+
+
+def test_non_max_suppression_uses_pyo3_and_returns_scored_boxes():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.non_max_suppression_py.return_value = [((0, 0, 10, 10), 0.9)]
+        result = bridge.non_max_suppression([{"bbox": [0, 0, 10, 10], "score": 0.9}], threshold=0.5)
+
+    assert result == [{"bbox": [0, 0, 10, 10], "score": 0.9}]
+
+
+def test_is_finite_score_rejects_missing_and_non_finite_values():
+    bridge = RustBridge()
+
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1]}) is False
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1], "score": None}) is False
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1], "score": float("nan")}) is False
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1], "score": float("inf")}) is False
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1], "score": "bad"}) is False
+    assert bridge._is_finite_score({"bbox": [0, 0, 1, 1], "score": 0.9}) is True
+
+
+def test_non_max_suppression_filters_non_finite_scores_before_bridge():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.non_max_suppression_py.return_value = [((0, 0, 10, 10), 0.9)]
+        result = bridge.non_max_suppression(
+            [
+                {"bbox": [0, 0, 10, 10], "score": float("nan")},
+                {"bbox": [0, 0, 10, 10], "score": 0.9},
+            ],
+            threshold=0.5,
+        )
+
+    rust_native.non_max_suppression_py.assert_called_once_with([([0, 0, 10, 10], 0.9)], 0.5)
+    assert result == [{"bbox": [0, 0, 10, 10], "score": 0.9}]
+
+
+def test_non_max_suppression_falls_back_to_python_when_rust_fails():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.non_max_suppression_py.side_effect = RuntimeError("boom")
+        result = bridge.non_max_suppression(
+            [
+                {"bbox": [0, 0, 10, 10], "score": 0.9},
+                {"bbox": [1, 1, 9, 9], "score": 0.8},
+                {"bbox": [20, 20, 30, 30], "score": 0.7},
+            ],
+            threshold=0.5,
+        )
+
+    assert result == [
+        {"bbox": [0, 0, 10, 10], "score": 0.9},
+        {"bbox": [20, 20, 30, 30], "score": 0.7},
+    ]
+
+
+def test_perceptual_hash_uses_pyo3_and_returns_hash():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.perceptual_hash_py.return_value = 123456789
+        result = bridge.perceptual_hash([0, 1, 2, 3], 2, 2)
+
+    assert result == 123456789
+
+
+def test_hamming_distance_uses_pyo3_and_returns_distance():
+    bridge = RustBridge()
+
+    with patch("app.infrastructure.ml.rust_bridge._rust_native", create=True) as rust_native:
+        rust_native.hamming_distance_py.return_value = 7
+        result = bridge.hamming_distance(1, 2)
+
+    assert result == 7
+
+
 def test_close_is_a_noop():
     bridge = RustBridge()
     assert bridge.close() is None

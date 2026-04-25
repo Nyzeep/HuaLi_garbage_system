@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
-from sqlalchemy import create_engine
+import sqlite3
+
+import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 from app.constants import ALL_CLASSES
-from app.database import Base
+from app.database import Base, SQLITE_BUSY_TIMEOUT_MS, create_database_engine
 from app.db_models import AlertRecord, DetectionRecord, VideoTaskRecord
 from app.services.record_service import RecordService
 
 
 def make_session(tmp_path: Path):
     db_path = tmp_path / "record_service.db"
-    engine = create_engine(f"sqlite:///{db_path}", future=True, connect_args={"check_same_thread": False})
+    engine = create_database_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     return Session(), engine
@@ -145,3 +148,54 @@ def test_list_alerts_filters_and_orders_records(tmp_path):
     finally:
         db.close()
         engine.dispose()
+
+
+def test_create_database_engine_enables_sqlite_wal_and_busy_timeout(tmp_path):
+    db_path = tmp_path / "wal.db"
+    engine = create_database_engine(f"sqlite:///{db_path}")
+
+    try:
+        with engine.connect() as connection:
+            journal_mode = connection.exec_driver_sql("PRAGMA journal_mode").scalar()
+            busy_timeout = connection.exec_driver_sql("PRAGMA busy_timeout").scalar()
+
+        assert str(journal_mode).lower() == "wal"
+        assert busy_timeout == SQLITE_BUSY_TIMEOUT_MS
+    finally:
+        engine.dispose()
+
+
+def test_commit_with_retry_retries_locked_sqlite_writes(tmp_path, monkeypatch, caplog):
+    db, engine = make_session(tmp_path)
+    service = RecordService(tmp_path)
+    locked_error = OperationalError(
+        "COMMIT",
+        {},
+        sqlite3.OperationalError("database is locked"),
+    )
+    calls: list[str] = []
+
+    def flaky_commit() -> None:
+        calls.append("commit")
+        if len(calls) == 1:
+            raise locked_error
+
+    rollback_calls: list[str] = []
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr(db, "commit", flaky_commit)
+    monkeypatch.setattr(db, "rollback", lambda: rollback_calls.append("rollback"))
+    monkeypatch.setattr("app.services.record_service.time.sleep", lambda seconds: sleep_calls.append(seconds))
+
+    try:
+        with caplog.at_level("WARNING", logger="app.services.record_service"):
+            service._commit_with_retry(db)
+    finally:
+        db.close()
+        engine.dispose()
+
+    assert calls == ["commit", "commit"]
+    assert rollback_calls == ["rollback"]
+    assert sleep_calls == [pytest.approx(0.1)]
+    assert "sqlite write retry attempt=1" in caplog.text
+    assert "delay_seconds=0.10" in caplog.text

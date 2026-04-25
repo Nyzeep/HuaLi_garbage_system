@@ -9,6 +9,12 @@ pub struct BBox {
     pub y2: i32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ScoredBBox {
+    pub bbox: BBox,
+    pub score: f64,
+}
+
 impl BBox {
     pub fn width(&self) -> i32 {
         (self.x2 - self.x1).max(0)
@@ -45,11 +51,27 @@ pub fn iou(a: BBox, b: BBox) -> f64 {
 }
 
 pub fn filter_overlapping_boxes(boxes: Vec<BBox>, threshold: f64) -> Vec<BBox> {
-    let mut kept: Vec<BBox> = Vec::new();
+    let scored: Vec<ScoredBBox> = boxes
+        .into_iter()
+        .map(|bbox| ScoredBBox {
+            score: bbox.area() as f64,
+            bbox,
+        })
+        .collect();
+    non_max_suppression(scored, threshold)
+        .into_iter()
+        .map(|item| item.bbox)
+        .collect()
+}
+
+pub fn non_max_suppression(mut boxes: Vec<ScoredBBox>, threshold: f64) -> Vec<ScoredBBox> {
+    boxes.retain(|item| !item.score.is_nan());
+    boxes.sort_by(|a, b| b.score.total_cmp(&a.score).reverse());
+    let mut kept: Vec<ScoredBBox> = Vec::new();
 
     'outer: for candidate in boxes {
         for existing in &kept {
-            if iou(candidate, *existing) >= threshold {
+            if iou(candidate.bbox, existing.bbox) >= threshold {
                 continue 'outer;
             }
         }
@@ -57,6 +79,83 @@ pub fn filter_overlapping_boxes(boxes: Vec<BBox>, threshold: f64) -> Vec<BBox> {
     }
 
     kept
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct LetterboxTransform {
+    pub scale: f64,
+    pub pad_w: f64,
+    pub pad_h: f64,
+    pub original_width: i32,
+    pub original_height: i32,
+}
+
+pub fn invert_letterbox_bbox(bbox: BBox, transform: LetterboxTransform) -> BBox {
+    let x1 = (((bbox.x1 as f64) - transform.pad_w) / transform.scale)
+        .clamp(0.0, transform.original_width as f64)
+        .round() as i32;
+    let y1 = (((bbox.y1 as f64) - transform.pad_h) / transform.scale)
+        .clamp(0.0, transform.original_height as f64)
+        .round() as i32;
+    let x2 = (((bbox.x2 as f64) - transform.pad_w) / transform.scale)
+        .clamp(0.0, transform.original_width as f64)
+        .round() as i32;
+    let y2 = (((bbox.y2 as f64) - transform.pad_h) / transform.scale)
+        .clamp(0.0, transform.original_height as f64)
+        .round() as i32;
+    BBox { x1, y1, x2, y2 }
+}
+
+pub fn batch_iou_match(left: Vec<BBox>, right: Vec<BBox>, threshold: f64) -> Vec<(usize, usize, f64)> {
+    let mut matches = Vec::new();
+    for (left_index, left_bbox) in left.iter().enumerate() {
+        let mut best_index: Option<usize> = None;
+        let mut best_score = 0.0;
+        for (right_index, right_bbox) in right.iter().enumerate() {
+            let score = iou(*left_bbox, *right_bbox);
+            if score >= threshold && score > best_score {
+                best_score = score;
+                best_index = Some(right_index);
+            }
+        }
+        if let Some(right_index) = best_index {
+            matches.push((left_index, right_index, best_score));
+        }
+    }
+    matches
+}
+
+pub fn perceptual_hash(grayscale_pixels: Vec<u8>, width: usize, height: usize) -> u64 {
+    if width == 0 || height == 0 || grayscale_pixels.len() != width * height {
+        return 0;
+    }
+
+    let target_w = 9usize;
+    let target_h = 8usize;
+    let mut resized = vec![0u8; target_w * target_h];
+    for y in 0..target_h {
+        for x in 0..target_w {
+            let src_x = x * width / target_w;
+            let src_y = y * height / target_h;
+            resized[y * target_w + x] = grayscale_pixels[src_y * width + src_x];
+        }
+    }
+
+    let mut hash = 0u64;
+    for y in 0..target_h {
+        for x in 0..(target_w - 1) {
+            let left = resized[y * target_w + x];
+            let right = resized[y * target_w + x + 1];
+            let bit = if left > right { 1u64 } else { 0u64 };
+            let bit_index = y * (target_w - 1) + x;
+            hash |= bit << bit_index;
+        }
+    }
+    hash
+}
+
+pub fn hamming_distance(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +214,23 @@ mod py_api {
         Ok(out)
     }
 
+    fn py_to_scored_bbox_list(items: &Bound<'_, PyAny>) -> PyResult<Vec<ScoredBBox>> {
+        let mut out = Vec::new();
+        for item in items.iter()? {
+            let value = item?;
+            if let Ok(seq) = value.downcast::<PySequence>() {
+                let bbox = py_to_bbox(&seq.get_item(0)?)?;
+                let score: f64 = seq.get_item(1)?.extract()?;
+                out.push(ScoredBBox { bbox, score });
+                continue;
+            }
+            let bbox = py_to_bbox(&value.getattr("bbox")?)?;
+            let score: f64 = value.getattr("score")?.extract()?;
+            out.push(ScoredBBox { bbox, score });
+        }
+        Ok(out)
+    }
+
     fn bbox_to_py(py: Python<'_>, bbox: BBox) -> PyResult<Py<PyAny>> {
         Ok((bbox.x1, bbox.y1, bbox.x2, bbox.y2).into_py(py))
     }
@@ -137,9 +253,58 @@ mod py_api {
         Ok((event.class_id, (event.bbox.x1, event.bbox.y1, event.bbox.x2, event.bbox.y2), event.timestamp_ms).into_py(py))
     }
 
+    fn py_to_letterbox_transform(obj: &Bound<'_, PyAny>) -> PyResult<LetterboxTransform> {
+        if let Ok(seq) = obj.downcast::<PySequence>() {
+            return Ok(LetterboxTransform {
+                scale: seq.get_item(0)?.extract()?,
+                pad_w: seq.get_item(1)?.extract()?,
+                pad_h: seq.get_item(2)?.extract()?,
+                original_width: seq.get_item(3)?.extract()?,
+                original_height: seq.get_item(4)?.extract()?,
+            });
+        }
+        Ok(LetterboxTransform {
+            scale: obj.getattr("scale")?.extract()?,
+            pad_w: obj.getattr("pad_w")?.extract()?,
+            pad_h: obj.getattr("pad_h")?.extract()?,
+            original_width: obj.getattr("original_width")?.extract()?,
+            original_height: obj.getattr("original_height")?.extract()?,
+        })
+    }
+
     #[pyfunction]
     fn iou_py(a: &Bound<'_, PyAny>, b: &Bound<'_, PyAny>) -> PyResult<f64> {
         Ok(super::iou(py_to_bbox(a)?, py_to_bbox(b)?))
+    }
+
+    #[pyfunction]
+    fn invert_letterbox_bbox_py(py: Python<'_>, bbox: &Bound<'_, PyAny>, transform: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let result = super::invert_letterbox_bbox(py_to_bbox(bbox)?, py_to_letterbox_transform(transform)?);
+        bbox_to_py(py, result)
+    }
+
+    #[pyfunction]
+    fn batch_iou_match_py(left: &Bound<'_, PyAny>, right: &Bound<'_, PyAny>, threshold: f64) -> PyResult<Vec<(usize, usize, f64)>> {
+        Ok(super::batch_iou_match(py_to_bbox_list(left)?, py_to_bbox_list(right)?, threshold))
+    }
+
+    #[pyfunction]
+    fn perceptual_hash_py(grayscale_pixels: Vec<u8>, width: usize, height: usize) -> PyResult<u64> {
+        Ok(super::perceptual_hash(grayscale_pixels, width, height))
+    }
+
+    #[pyfunction]
+    fn hamming_distance_py(a: u64, b: u64) -> PyResult<u32> {
+        Ok(super::hamming_distance(a, b))
+    }
+
+    #[pyfunction]
+    fn non_max_suppression_py(py: Python<'_>, boxes: &Bound<'_, PyAny>, threshold: f64) -> PyResult<Vec<Py<PyAny>>> {
+        let boxes = py_to_scored_bbox_list(boxes)?;
+        Ok(super::non_max_suppression(boxes, threshold)
+            .into_iter()
+            .map(|item| ((item.bbox.x1, item.bbox.y1, item.bbox.x2, item.bbox.y2), item.score).into_py(py))
+            .collect())
     }
 
     #[pyfunction]
@@ -168,6 +333,11 @@ mod py_api {
     #[pymodule]
     fn huali_garbage_core(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         m.add_function(wrap_pyfunction!(iou_py, m)?)?;
+        m.add_function(wrap_pyfunction!(invert_letterbox_bbox_py, m)?)?;
+        m.add_function(wrap_pyfunction!(batch_iou_match_py, m)?)?;
+        m.add_function(wrap_pyfunction!(perceptual_hash_py, m)?)?;
+        m.add_function(wrap_pyfunction!(hamming_distance_py, m)?)?;
+        m.add_function(wrap_pyfunction!(non_max_suppression_py, m)?)?;
         m.add_function(wrap_pyfunction!(filter_overlapping_boxes_py, m)?)?;
         m.add_function(wrap_pyfunction!(dedupe_track_events_py, m)?)?;
         Ok(())
@@ -202,6 +372,17 @@ mod tests {
         assert_eq!(filter_overlapping_boxes(vec![bbox(0,0,100,100), bbox(0,0,100,100)], 0.5).len(), 1);
     }
     #[test] fn filter_empty() { assert_eq!(filter_overlapping_boxes(vec![], 0.5).len(), 0); }
+    #[test] fn nms_ignores_nan_scores() {
+        let kept = non_max_suppression(
+            vec![
+                ScoredBBox { bbox: bbox(0, 0, 10, 10), score: f64::NAN },
+                ScoredBBox { bbox: bbox(0, 0, 10, 10), score: 0.9 },
+            ],
+            0.5,
+        );
+        assert_eq!(kept.len(), 1);
+        assert!(!kept[0].score.is_nan());
+    }
 
     #[test] fn dedupe_single_kept() {
         assert_eq!(dedupe_track_events(vec![ev(0,0,0,100,100,0)], 1000, 0.3).len(), 1);

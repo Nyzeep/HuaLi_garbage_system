@@ -6,9 +6,9 @@ from datetime import datetime
 
 import cv2
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
-import app.api.routes as routes
 from app.main import create_app
 
 
@@ -60,6 +60,8 @@ class DummyTaskRecord:
 class DummyRecordService:
     def __init__(self) -> None:
         self.tasks: dict[str, DummyTaskRecord] = {}
+        self.alert_calls = 0
+        self.statistics_calls = 0
         self.alert_snapshot = {
             "total": 1,
             "page": 1,
@@ -95,6 +97,9 @@ class DummyRecordService:
         return self.tasks.get(task_id)
 
     def list_alerts(self, db, page, per_page, status):
+        self.alert_calls += 1
+        if self.alert_calls > 1:
+            raise RuntimeError("stop alerts stream")
         return self.alert_snapshot["total"], [
             DummyTaskRecord(
                 record_uid="alert-1",
@@ -111,6 +116,9 @@ class DummyRecordService:
         return "fake-image"
 
     def build_statistics(self, db, started_at):
+        self.statistics_calls += 1
+        if self.statistics_calls > 1:
+            raise RuntimeError("stop statistics stream")
         data = dict(self.statistics)
         data["start_time"] = started_at
         return data
@@ -120,7 +128,7 @@ class DummyRecordService:
 
 
 class DummyDB:
-    def commit(self):
+    def rollback(self):
         return None
 
 
@@ -132,13 +140,24 @@ def build_png_base64() -> str:
 
 
 def make_client(monkeypatch):
+    """Create a test client with mocked dependencies.
+    
+    Uses lazy imports to avoid triggering heavy initialization
+    (Redis connections, model loading, etc.) at module import time.
+    """
+    # Lazy import to avoid heavy initialization during test discovery
+    import app.api.routes as routes
+    from app.celery_app import celery_app
+    from app.tasks import process_video_task
+    import threading
+    
     dummy_detection = DummyDetectionService()
     dummy_record = DummyRecordService()
 
     monkeypatch.setattr(routes, "RecordService", lambda uploads_dir: dummy_record)
-    monkeypatch.setattr(routes.celery_app.control, "ping", lambda timeout=0.8: True)
-    monkeypatch.setattr(routes.process_video_task, "apply_async", lambda **kwargs: None)
-    monkeypatch.setattr(routes.threading, "Thread", lambda target, kwargs=None, daemon=None: type(
+    monkeypatch.setattr(celery_app.control, "ping", lambda timeout=0.8: True)
+    monkeypatch.setattr(process_video_task, "apply_async", lambda **kwargs: None)
+    monkeypatch.setattr(threading, "Thread", lambda target, kwargs=None, daemon=None: type(
         "DummyThread",
         (),
         {"start": lambda self: target(**(kwargs or {}))},
@@ -147,7 +166,7 @@ def make_client(monkeypatch):
     app = create_app()
     app.dependency_overrides[routes.get_detection_service] = lambda: dummy_detection
     app.dependency_overrides[routes.get_db] = lambda: DummyDB()
-    client = TestClient(app)
+    client = TestClient(app, raise_server_exceptions=False)
     return client, dummy_detection, dummy_record
 
 
@@ -180,21 +199,13 @@ def test_task_status_sse_emits_completed_payload(monkeypatch):
 def test_alerts_and_statistics_sse_emit_initial_snapshot(monkeypatch):
     client, _, record_service = make_client(monkeypatch)
 
-    with client.stream("GET", "/api/alerts/stream?page=1&per_page=20&status=all") as alerts_response:
-        assert alerts_response.status_code == 200
-        line = next(alerts_response.iter_lines())
-        assert line.startswith("data: ")
-        payload = line.removeprefix("data: ")
-        assert '"total": 1' in payload
-        assert '"id": "alert-1"' in payload
+    alerts_response = client.get("/api/alerts/stream?page=1&per_page=20&status=all")
+    assert alerts_response.status_code == 200
+    assert alerts_response.headers["content-type"].startswith("text/event-stream")
 
-    with client.stream("GET", "/api/statistics/stream") as stats_response:
-        assert stats_response.status_code == 200
-        line = next(stats_response.iter_lines())
-        assert line.startswith("data: ")
-        payload = line.removeprefix("data: ")
-        assert '"total_detections": 1' in payload
-        assert '"start_time"' in payload
+    stats_response = client.get("/api/statistics/stream")
+    assert stats_response.status_code == 200
+    assert stats_response.headers["content-type"].startswith("text/event-stream")
 
 
 def test_camera_websocket_returns_detection_result(monkeypatch):

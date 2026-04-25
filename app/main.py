@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -63,4 +64,32 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+def create_asgi_app() -> FastAPI:
+    """Factory function for ASGI servers (uvicorn, gunicorn, etc.).
+
+    Usage:
+        uvicorn app.main:create_asgi_app --factory --host 127.0.0.1 --port 8000
+    """
+    return create_app()
+
+
+class _LazyASGIApp:
+    def __init__(self) -> None:
+        self._app: FastAPI | None = None
+
+    def _get_app(self) -> FastAPI:
+        if self._app is None:
+            self._app = create_app()
+        return self._app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        await self._get_app()(scope, receive, send)
+
+
+app = _LazyASGIApp()
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8765)

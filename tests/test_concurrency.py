@@ -4,17 +4,16 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.database import Base
+from app.database import Base, create_database_engine
 from app.db_models import VideoTaskRecord
 from app.services.record_service import RecordService
 
 
 def make_session_factory(tmp_path: Path):
     db_path = tmp_path / "concurrency.db"
-    engine = create_engine(f"sqlite:///{db_path}", future=True, connect_args={"check_same_thread": False})
+    engine = create_database_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
     return Session, engine
