@@ -657,8 +657,10 @@ async function detectImage() {
   formData.append('file', selectedFile);
 
   try {
-    const response = await fetch('/api/detect/image', {
+    const response = await fetch(`/api/detect/image?t=${Date.now()}`, {
       method: 'POST',
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
       body: formData
     });
 
@@ -680,8 +682,9 @@ async function detectBase64(imageData) {
   setLoading(true);
 
   try {
-    const response = await fetch('/api/detect/base64', {
+    const response = await fetch(`/api/detect/base64?t=${Date.now()}`, {
       method: 'POST',
+      cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ image: imageData })
     });
@@ -956,8 +959,9 @@ async function startVideoDetection() {
   formData.append('skip_frames', '1');
 
   try {
-    const submitResp = await fetch('/api/detect/video', {
+    const submitResp = await fetch(`/api/detect/video?t=${Date.now()}`, {
       method: 'POST',
+      cache: 'no-store',
       body: formData,
     });
     const submitData = await submitResp.json().catch(() => ({}));
@@ -982,7 +986,7 @@ async function startVideoDetection() {
 
 async function pollVideoTaskStatus(taskId) {
   while (isDetectingVideo) {
-    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+    const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}?t=${Date.now()}`, { cache: 'no-store' });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(result.detail || result.error || result.message || '任务状态查询失败');

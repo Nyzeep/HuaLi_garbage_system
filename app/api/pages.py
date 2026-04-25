@@ -32,5 +32,9 @@ def build_pages_router(templates: Jinja2Templates) -> APIRouter:
     async def page_video(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request=request, name="video.html")
 
+    @router.get("/collection", response_class=HTMLResponse)
+    async def page_collection(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse(request=request, name="collection.html")
+
     return router
 

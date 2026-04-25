@@ -29,7 +29,7 @@ BIN_COLOR_TO_TYPE: dict[str, dict[str, str]] = {
     "red": {"key": "hazardous", "name": "有害垃圾桶"},
     "gray": {"key": "other", "name": "其他垃圾桶"},
     "green": {"key": "kitchen", "name": "厨余垃圾桶"},
-    "other": {"key": "other_misc", "name": "其他"},
+    "other": {"key": "other_misc", "name": "垃圾桶"},
 }
 
 EVENT_NAME_OVERRIDE: dict[int, str] = {
@@ -196,6 +196,9 @@ class DetectionService:
                 if class_id == 0:
                     if prediction.confidence < self.settings.garbage_bin_conf_threshold:
                         continue
+                elif class_id == 2:
+                    if prediction.confidence < self.settings.garbage_litter_conf_threshold:
+                        continue
                 elif bundle.key == "garbage" and prediction.confidence < self.settings.default_conf_threshold:
                     continue
 
@@ -218,10 +221,36 @@ class DetectionService:
                     },
                 )
 
-        result_list = self._promote_garbage_to_fire_by_color(image, result_list)
+        # Disable garbage->fire color fallback to avoid warm-color litter false positives.
+        # Keep fire decisions from the dedicated fire model only.
+        # result_list = self._promote_garbage_to_fire_by_color(image, result_list)
+        result_list = self._suppress_fire_false_positives(image, result_list)
         result_list = self._apply_fire_priority_over_garbage(result_list)
         result_list = self._suppress_smoke_false_positives(image, result_list)
-        return self._classwise_nms(result_list, target_class_id=3, iou_threshold=0.35)
+        result_list = self._classwise_nms(
+            result_list,
+            target_class_id=1,
+            iou_threshold=self.settings.overflow_nms_iou_threshold,
+            ios_threshold=self.settings.overflow_nms_ios_threshold,
+        )
+        result_list = self._classwise_nms(
+            result_list,
+            target_class_id=2,
+            iou_threshold=self.settings.litter_nms_iou_threshold,
+            ios_threshold=self.settings.litter_nms_ios_threshold,
+        )
+        result_list = self._classwise_nms(
+            result_list,
+            target_class_id=3,
+            iou_threshold=self.settings.fire_nms_iou_threshold,
+            ios_threshold=self.settings.fire_nms_ios_threshold,
+        )
+        return self._classwise_nms(
+            result_list,
+            target_class_id=4,
+            iou_threshold=self.settings.smoke_nms_iou_threshold,
+            ios_threshold=self.settings.smoke_nms_ios_threshold,
+        )
 
     @staticmethod
     def _iou(box_a: list[int], box_b: list[int]) -> float:
@@ -238,6 +267,22 @@ class DetectionService:
         area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
         union = area_a + area_b - inter_area
         return inter_area / union if union > 0 else 0.0
+
+    @staticmethod
+    def _overlap_on_smaller(box_a: list[int], box_b: list[int]) -> float:
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_w = max(0, inter_x2 - inter_x1)
+        inter_h = max(0, inter_y2 - inter_y1)
+        inter_area = inter_w * inter_h
+        area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+        area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+        smaller = min(area_a, area_b)
+        return inter_area / smaller if smaller > 0 else 0.0
 
     def _apply_fire_priority_over_garbage(self, detections: list[dict]) -> list[dict]:
         # Fire has higher priority than overflow/scattered-garbage when regions overlap.
@@ -325,8 +370,8 @@ class DetectionService:
         (e.g., red-white roadside bollards).
         """
         h, w = image.shape[:2]
-        top_ignore_px = int(h * self.SMOKE_TOP_IGNORE_RATIO)
-        bottom_ignore_px = int(h * (1.0 - self.SMOKE_BOTTOM_IGNORE_RATIO))
+        bin_boxes = [d["bbox"] for d in detections if int(d.get("class_id", -1)) == 0]
+        fire_boxes = [d["bbox"] for d in detections if int(d.get("class_id", -1)) == 3]
         out: list[dict] = []
         for det in detections:
             if det["class_id"] != 4:  # smoke
@@ -341,6 +386,8 @@ class DetectionService:
             bw = max(1, x2 - x1)
             bh = max(1, y2 - y1)
             area = bw * bh
+            conf = float(det.get("confidence", 0.0))
+            cx, cy = self._bbox_center([x1, y1, x2, y2])
 
             crop = image[y1:y2, x1:x2]
             if crop.size == 0:
@@ -351,25 +398,112 @@ class DetectionService:
             too_slender = (bh / bw) > 2.8
             too_small = area < int(h * w * 0.004)
             highly_saturated = mean_sat > 95.0
-            in_top_banner_zone = y2 <= top_ignore_px
-            in_bottom_blur_zone = y1 >= bottom_ignore_px
-            lower_confidence = float(det.get("confidence", 0.0)) < 0.75
             gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             texture_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-            low_texture = texture_var < 24.0
+            low_texture = texture_var < 18.0
 
             # Suppress likely bollard-like false positives:
             # small + very slender + strong saturation.
             if too_small and too_slender and highly_saturated:
                 continue
-            # Suppress likely subtitle/banner false positives in the top area.
-            if in_top_banner_zone and lower_confidence:
+            # Keep faint smoke as much as possible; only suppress tiny,
+            # low-texture and high-saturation patches.
+            if too_small and low_texture and highly_saturated:
                 continue
-            # Suppress likely bottom blur-bar false positives.
-            if in_bottom_blur_zone and (lower_confidence or low_texture):
+            # Suppress isolated low-confidence smoke far away from
+            # garbage bins and fire boxes.
+            near_bin = any(
+                (self._iou([x1, y1, x2, y2], box) >= 0.01)
+                or (box[0] <= cx <= box[2] and box[1] <= cy <= box[3])
+                for box in bin_boxes
+            )
+            near_fire = any(
+                (self._iou([x1, y1, x2, y2], box) >= 0.01)
+                or (box[0] <= cx <= box[2] and box[1] <= cy <= box[3])
+                for box in fire_boxes
+            )
+            if (not near_bin) and (not near_fire) and conf < 0.55:
+                continue
+            # Suppress corner ghost boxes from background haze/overexposure.
+            touch_top = y1 <= int(h * 0.03)
+            touch_left = x1 <= int(w * 0.03)
+            touch_right = x2 >= int(w * 0.97)
+            if touch_top and (touch_left or touch_right) and conf < 0.65:
                 continue
 
             out.append(det)
+        return out
+
+    def _suppress_fire_false_positives(self, image: np.ndarray, detections: list[dict]) -> list[dict]:
+        """
+        Suppress obvious fire false positives such as small red highlights
+        far away from garbage bins (e.g., traffic lights / reflections).
+        """
+        h, w = image.shape[:2]
+        top_ignore_px = int(h * 0.52)
+        bin_boxes = [d["bbox"] for d in detections if int(d.get("class_id", -1)) == 0]
+        smoke_boxes = [d["bbox"] for d in detections if int(d.get("class_id", -1)) == 4]
+
+        out: list[dict] = []
+        for det in detections:
+            if int(det.get("class_id", -1)) != 3:  # fire
+                out.append(det)
+                continue
+
+            x1, y1, x2, y2 = [int(v) for v in det["bbox"]]
+            x1 = max(0, min(x1, w - 1))
+            x2 = max(0, min(x2, w))
+            y1 = max(0, min(y1, h - 1))
+            y2 = max(0, min(y2, h))
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
+            area = bw * bh
+            conf = float(det.get("confidence", 0.0))
+
+            crop = image[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            mean_sat = float(hsv[:, :, 1].mean())
+            mean_val = float(hsv[:, :, 2].mean())
+            fire_like_mask = (
+                ((hsv[:, :, 0] <= 35) | (hsv[:, :, 0] >= 170))
+                & (hsv[:, :, 1] >= 90)
+                & (hsv[:, :, 2] >= 110)
+            )
+            fire_like_ratio = float(fire_like_mask.mean())
+
+            near_bin = any(self._iou([x1, y1, x2, y2], box) >= 0.02 for box in bin_boxes)
+            cx, cy = self._bbox_center([x1, y1, x2, y2])
+            near_smoke = any(
+                (self._iou([x1, y1, x2, y2], box) >= 0.01)
+                or (box[0] <= cx <= box[2] and box[1] <= cy <= box[3])
+                for box in smoke_boxes
+            )
+            tiny = area < int(h * w * 0.006)
+            in_top_zone = y2 <= top_ignore_px
+            low_conf = conf < 0.55
+            overly_bright_patch = mean_val > 160.0
+            highly_saturated = mean_sat > 120.0
+
+            if (not near_bin) and tiny and in_top_zone and low_conf and (overly_bright_patch or highly_saturated):
+                continue
+            # Suppress isolated low-confidence fire boxes that are far from
+            # both garbage bins and smoke regions.
+            small_or_medium = area < int(h * w * 0.03)
+            if (not near_bin) and (not near_smoke) and small_or_medium and conf < 0.35:
+                continue
+            # Without smoke support, require higher fire confidence.
+            # This reduces warm-color litter being flagged as fire.
+            if (not near_smoke) and conf < self.settings.fire_conf_threshold_without_smoke:
+                continue
+            # Low-confidence fire boxes must show enough fire-like colors,
+            # otherwise suppress as likely red object/reflection false positives.
+            if conf < 0.30 and fire_like_ratio < self.settings.fire_low_conf_color_ratio_threshold:
+                continue
+
+            out.append(det)
+
         return out
 
     def _classwise_nms(
@@ -377,6 +511,7 @@ class DetectionService:
         detections: list[dict],
         target_class_id: int,
         iou_threshold: float = 0.35,
+        ios_threshold: float = 0.65,
     ) -> list[dict]:
         """
         Apply extra NMS on a specific class across model sources.
@@ -396,7 +531,9 @@ class DetectionService:
             remaining: list[dict] = []
             for cand in target:
                 cand_box = cand.get("bbox", [0, 0, 0, 0])
-                if self._iou(best_box, cand_box) < iou_threshold:
+                iou = self._iou(best_box, cand_box)
+                ios = self._overlap_on_smaller(best_box, cand_box)
+                if iou < iou_threshold and ios < ios_threshold:
                     remaining.append(cand)
             target = remaining
         return others + kept
@@ -426,7 +563,7 @@ class DetectionService:
             det2 = det.copy()
             if pred is not None and pred.confidence >= self.settings.bin_color_min_confidence:
                 color_label = str(pred.label).lower()
-                type_info = BIN_COLOR_TO_TYPE.get(color_label, {"key": "other_misc", "name": "其他"})
+                type_info = BIN_COLOR_TO_TYPE.get(color_label, {"key": "other_misc", "name": "垃圾桶"})
                 det2["bin_color"] = color_label
                 det2["bin_color_confidence"] = round(pred.confidence, 3)
                 det2["bin_type_key"] = type_info["key"]

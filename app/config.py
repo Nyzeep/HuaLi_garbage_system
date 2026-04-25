@@ -54,9 +54,20 @@ class Settings(BaseSettings):
 
     default_conf_threshold: float = 0.5
     garbage_bin_conf_threshold: float = 0.4
+    garbage_litter_conf_threshold: float = 0.38
     fire_conf_threshold: float = 0.15
+    fire_conf_threshold_without_smoke: float = 0.65
     smoke_conf_threshold: float = 0.30
+    fire_low_conf_color_ratio_threshold: float = 0.10
     default_iou_threshold: float = 0.3
+    fire_nms_iou_threshold: float = 0.35
+    smoke_nms_iou_threshold: float = 0.20
+    fire_nms_ios_threshold: float = 0.60
+    smoke_nms_ios_threshold: float = 0.70
+    overflow_nms_iou_threshold: float = 0.30
+    overflow_nms_ios_threshold: float = 0.60
+    litter_nms_iou_threshold: float = 0.25
+    litter_nms_ios_threshold: float = 0.55
 
 
 @lru_cache
