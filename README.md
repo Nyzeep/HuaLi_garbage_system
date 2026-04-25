@@ -333,7 +333,7 @@ GET /api/classes
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。
+本项目采用 [MIT License](LICENSE)
 
 ## 支持项目
 
