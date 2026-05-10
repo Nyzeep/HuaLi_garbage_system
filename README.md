@@ -175,28 +175,21 @@ garbage_system/
 
 ## 安装与运行
 
-### 1. 克隆项目
+### 离线交付说明
+
+本项目用于课程展示或现场演示时，请下载或拷贝完整项目目录，项目目录中需要包含已经配置好的 Python 虚拟环境，例如 `.venv311`、`.venv` 或 `venv`。依赖库应提前安装在该虚拟环境中，现场只需双击 `start_queue.bat` 启动，不需要再联网执行 `pip install -r requirements.txt`。
+
+请不要只拷贝 `app`、`README.md`、`requirements.txt` 等源码文件。如果缺少项目内虚拟环境，或虚拟环境中的依赖不完整，`start_queue.bat` 会停止并提示使用完整离线包。
+
+### 开发环境安装
+
+如果是开发者从源码重新配置环境，可按以下步骤手动安装：
 
 ```bash
 git clone https://github.com/Nyzeep/HuaLi_garbage_system.git
 cd HuaLi_garbage_system
-```
-
-### 2. 创建虚拟环境
-
-```bash
 python -m venv .venv
-```
-
-Windows 激活方式：
-
-```bash
 .venv\Scripts\activate
-```
-
-### 3. 安装依赖
-
-```bash
 pip install -r requirements.txt
 ```
 
@@ -226,11 +219,12 @@ start_queue.bat
 
 脚本会自动完成以下流程：
 
-1. 检查当前环境或项目目录下可用的虚拟环境
-2. 自动创建 `.venv`（如不存在）
-3. 自动安装缺失依赖
-4. 启动 Celery Worker
-5. 启动 FastAPI Web 服务并打开浏览器（默认访问 `http://127.0.0.1:8010`）
+1. 检查项目目录下可用的虚拟环境
+2. 检查关键依赖是否已经安装在该虚拟环境中
+3. 启动 Celery Worker
+4. 启动 FastAPI Web 服务并打开浏览器（默认访问 `http://127.0.0.1:8010`）
+
+注意：一键启动脚本面向离线演示场景，不会自动创建虚拟环境，也不会自动联网安装依赖。请确保提交或拷贝项目时保留项目目录下的 `.venv311`、`.venv` 或 `venv`。
 
 ### 方式二：手动启动
 

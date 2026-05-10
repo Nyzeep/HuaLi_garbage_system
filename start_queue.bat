@@ -5,16 +5,9 @@ cd /d "%~dp0"
 
 set "VENV_DIR="
 set "VENV_PYTHON="
-set "NEED_INSTALL=0"
 set "APP_PORT=8010"
 
 echo [1/4] Checking Python virtual environment...
-
-if defined VIRTUAL_ENV (
-    if exist "%VIRTUAL_ENV%\Scripts\python.exe" (
-        set "VENV_DIR=%VIRTUAL_ENV%"
-    )
-)
 
 if not defined VENV_DIR (
     for %%D in (.venv .venv311 venv) do (
@@ -37,27 +30,11 @@ if not defined VENV_DIR (
 )
 
 if not defined VENV_DIR (
-    echo No virtual environment found. Creating .venv...
-
-    where py >nul 2>&1
-    if not errorlevel 1 (
-        py -3.11 -m venv .venv >nul 2>&1
-    )
-
-    if not exist ".venv\Scripts\python.exe" (
-        python -m venv .venv >nul 2>&1
-    )
-
-    if not exist ".venv\Scripts\python.exe" (
-        echo [ERROR] Failed to create virtual environment.
-        echo Please make sure Python is installed and available in PATH.
-        pause
-        exit /b 1
-    )
-
-    set "VENV_DIR=.venv"
-    set "NEED_INSTALL=1"
-    echo Virtual environment created: !VENV_DIR!
+    echo [ERROR] No project virtual environment found.
+    echo Please download or copy the complete project directory, including .venv311/.venv/venv.
+    echo This offline startup script will not create a virtual environment or download dependencies on site.
+    pause
+    exit /b 1
 ) else (
     echo Using virtual environment: !VENV_DIR!
 )
@@ -66,24 +43,11 @@ for %%I in ("!VENV_DIR!\Scripts\python.exe") do set "VENV_PYTHON=%%~fI"
 
 "!VENV_PYTHON!" -c "import fastapi, uvicorn, celery, redis, sqlalchemy, cv2" >nul 2>&1
 if errorlevel 1 (
-    set "NEED_INSTALL=1"
-)
-
-if "!NEED_INSTALL!"=="1" (
-    echo Installing project dependencies...
-    call "!VENV_PYTHON!" -m pip install --upgrade pip
-    if errorlevel 1 (
-        echo [ERROR] Failed to upgrade pip.
-        pause
-        exit /b 1
-    )
-
-    call "!VENV_PYTHON!" -m pip install -r requirements.txt
-    if errorlevel 1 (
-        echo [ERROR] Failed to install dependencies from requirements.txt.
-        pause
-        exit /b 1
-    )
+    echo [ERROR] The project virtual environment is incomplete or dependencies are missing.
+    echo Please use the prepared offline package with dependencies already installed.
+    echo This script intentionally skips pip install to avoid on-site network downloads.
+    pause
+    exit /b 1
 )
 
 echo [2/4] Cleaning stale backend processes...
