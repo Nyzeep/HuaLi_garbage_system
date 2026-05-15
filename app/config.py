@@ -68,10 +68,19 @@ class Settings(BaseSettings):
     overflow_nms_ios_threshold: float = 0.60
     litter_nms_iou_threshold: float = 0.25
     litter_nms_ios_threshold: float = 0.55
+    video_track_iou_default: float = 0.40
+    fire_track_iou_threshold: float = 0.35
+    smoke_track_iou_threshold: float = 0.30
+    garbage_track_iou_threshold: float = 0.45
+    overflow_track_iou_threshold: float = 0.45
+    video_bbox_smooth_alpha_default: float = 0.65
+    fire_bbox_smooth_alpha: float = 0.55
+    smoke_bbox_smooth_alpha: float = 0.60
+    garbage_bbox_smooth_alpha: float = 0.70
+    overflow_bbox_smooth_alpha: float = 0.70
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
 

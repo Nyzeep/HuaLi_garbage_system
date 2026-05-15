@@ -9,6 +9,7 @@ import imageio
 import numpy as np
 from PIL import Image, ImageDraw
 
+from app.config import Settings
 from app.services.detection_service import DetectionService
 from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
 
@@ -52,7 +53,6 @@ class ActiveEvent:
 
 
 class VideoEventStateManager:
-    VIDEO_IOU_MATCH_THRESHOLD = 0.4
     PRIORITY_SUPPRESS_IOU_THRESHOLD = 0.15
 
     CLASS_PRIORITIES = {
@@ -60,13 +60,6 @@ class VideoEventStateManager:
         4: 1,  # smoke
         2: 2,  # garbage
         1: 3,  # overflow
-    }
-
-    CONFIRM_RULES = {
-        3: {"window": 2, "required": 1, "mode": "2帧内1帧确认"},
-        4: {"window": 2, "required": 1, "mode": "2帧内1帧确认"},
-        2: {"window": 3, "required": 3, "mode": "连续3帧确认"},
-        1: {"window": 3, "required": 3, "mode": "连续3帧确认"},
     }
 
     CLEAR_RULES = {
@@ -99,7 +92,8 @@ class VideoEventStateManager:
     NIGHT_START_HOUR = 21
     NIGHT_END_HOUR = 6
 
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.track_states: dict[tuple[int, int], DetectionTrackState] = {}
         self.active_events: list[ActiveEvent] = []
         self.frame_index = 0
@@ -120,10 +114,50 @@ class VideoEventStateManager:
         return self.CLASS_PRIORITIES.get(class_id, 99)
 
     def _confirm_rule(self, class_id: int) -> dict:
-        return self.CONFIRM_RULES.get(class_id, {"window": 1, "required": 1, "mode": "单帧确认"})
+        if class_id in (3, 4):
+            return {"window": 2, "required": 1, "mode": "2-frame / 1-hit"}
+        if class_id in (1, 2):
+            return {"window": 3, "required": 3, "mode": "3-frame continuous"}
+        return {"window": 1, "required": 1, "mode": "single-frame"}
 
     def _clear_frames_for_class(self, class_id: int) -> int:
         return self.CLEAR_RULES.get(class_id, 3)
+
+    def _track_iou_threshold(self, class_id: int) -> float:
+        if class_id == 3:
+            return float(self.settings.fire_track_iou_threshold)
+        if class_id == 4:
+            return float(self.settings.smoke_track_iou_threshold)
+        if class_id == 2:
+            return float(self.settings.garbage_track_iou_threshold)
+        if class_id == 1:
+            return float(self.settings.overflow_track_iou_threshold)
+        return float(self.settings.video_track_iou_default)
+
+    def _bbox_smooth_alpha(self, class_id: int) -> float:
+        if class_id == 3:
+            alpha = float(self.settings.fire_bbox_smooth_alpha)
+        elif class_id == 4:
+            alpha = float(self.settings.smoke_bbox_smooth_alpha)
+        elif class_id == 2:
+            alpha = float(self.settings.garbage_bbox_smooth_alpha)
+        elif class_id == 1:
+            alpha = float(self.settings.overflow_bbox_smooth_alpha)
+        else:
+            alpha = float(self.settings.video_bbox_smooth_alpha_default)
+        return min(max(alpha, 0.0), 0.95)
+
+    @staticmethod
+    def _smooth_bbox(previous_bbox: list[int] | None, current_bbox: list[int], alpha: float) -> list[int]:
+        if previous_bbox is None or len(previous_bbox) != 4 or len(current_bbox) != 4:
+            return list(current_bbox)
+
+        smoothed = [
+            int(round((alpha * float(prev)) + ((1.0 - alpha) * float(curr))))
+            for prev, curr in zip(previous_bbox, current_bbox)
+        ]
+        x1, y1, x2, y2 = smoothed
+        return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
 
     def _is_night_time(self, current_ts: float) -> bool:
         hour = int(current_ts // 3600) % 24
@@ -147,12 +181,14 @@ class VideoEventStateManager:
         class_id = int(detection.get("class_id", -1))
         track_id = detection.get("track_id")
         bbox = detection.get("bbox", [])
+        iou_threshold = self._track_iou_threshold(class_id)
+
         for event in self.active_events:
             if event.class_id != class_id or event.event_ended:
                 continue
             if (track_id is not None) and (event.track_id is not None) and int(track_id) == int(event.track_id):
                 return event
-            if bbox and event.bbox and self._compute_iou(bbox, event.bbox) >= self.VIDEO_IOU_MATCH_THRESHOLD:
+            if bbox and event.bbox and self._compute_iou(bbox, event.bbox) >= iou_threshold:
                 return event
         return None
 
@@ -163,25 +199,35 @@ class VideoEventStateManager:
 
         state = self.track_states.get(key)
         rule = self._confirm_rule(key[0])
+        raw_bbox = list(detection.get("bbox", []))
         if state is None:
             state = DetectionTrackState(
                 class_id=key[0],
                 class_name=str(detection.get("class_name", "unknown")),
                 track_id=key[1],
-                bbox=list(detection.get("bbox", [])),
+                bbox=list(raw_bbox),
                 frame_history=deque(maxlen=int(rule["window"])),
                 last_seen_frame=self.frame_index,
                 first_seen_ts=current_ts,
                 last_seen_ts=current_ts,
             )
             self.track_states[key] = state
+        else:
+            state.bbox = self._smooth_bbox(
+                previous_bbox=state.bbox,
+                current_bbox=raw_bbox,
+                alpha=self._bbox_smooth_alpha(state.class_id),
+            )
 
         state.class_name = str(detection.get("class_name", "unknown"))
-        state.bbox = list(detection.get("bbox", []))
         state.last_seen_frame = self.frame_index
         state.last_seen_ts = current_ts
         state.absent_streak = 0
         state.frame_history.append(True)
+
+        detection["raw_bbox"] = raw_bbox
+        detection["bbox"] = list(state.bbox)
+        detection["smoothed_bbox"] = list(state.bbox)
         return state
 
     def _update_absent_states(self, seen_keys: set[tuple[int, int]]) -> None:
@@ -193,9 +239,10 @@ class VideoEventStateManager:
 
     def _confirmation_met(self, state: DetectionTrackState) -> bool:
         rule = self._confirm_rule(state.class_id)
-        if len(state.frame_history) < int(rule["window"]):
+        required = int(rule["required"])
+        if len(state.frame_history) < required:
             return False
-        return sum(1 for item in state.frame_history if item) >= int(rule["required"])
+        return sum(1 for item in state.frame_history if item) >= required
 
     def _activate_event(self, state: DetectionTrackState, current_ts: float) -> ActiveEvent:
         event = self._match_active_event(
@@ -415,7 +462,7 @@ class VideoProcessingService:
             track_engine=TrackEngine(),
             alarm_engine=AlarmEngine(min_consecutive_frames=1),
         )
-        self.event_state = VideoEventStateManager()
+        self.event_state = VideoEventStateManager(settings=detection_service.settings)
 
     @staticmethod
     def _bgr_to_rgb(frame: np.ndarray) -> np.ndarray:
