@@ -46,6 +46,7 @@ class ActiveEvent:
     state: str = "remembered"
     confirmation_mode: str = ""
     duration_seconds: float = 0.0
+    last_push_ts: float = -9999.0
     suppressed_by_priority: bool = False
     event_ended: bool = False
 
