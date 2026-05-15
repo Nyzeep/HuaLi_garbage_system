@@ -117,9 +117,10 @@ class VideoTaskStatusResponse(BaseModel):
     active_alert_count: int = 0
     highest_priority_alert: str | None = None
     new_alert_count: int = 0
+    sustained_alert_count: int = 0
+    ended_alert_count: int = 0
 
 
 class Base64ImageRequest(BaseModel):
     image: str = Field(..., min_length=16)
-
 

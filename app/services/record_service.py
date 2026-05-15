@@ -161,6 +161,8 @@ class RecordService:
             "active_alert_count": 0,
             "highest_priority_alert": None,
             "new_alert_count": 0,
+            "sustained_alert_count": 0,
+            "ended_alert_count": 0,
         }
         if task is not None:
             if task.output_path:

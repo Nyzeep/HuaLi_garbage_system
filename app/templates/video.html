@@ -397,11 +397,16 @@ function renderActiveAlerts(task) {
   summary.classList.remove('hidden');
   const highest = task.highest_priority_alert || activeAlerts[0].class_name || '未知事件';
   const newCount = Number(task.new_alert_count || 0);
-  summaryText.textContent = `最高优先级：${highest}${newCount > 0 ? ` · 本轮新增 ${newCount} 项` : ''}`;
+  const sustainedCount = Number(task.sustained_alert_count || 0);
+  const endedCount = Number(task.ended_alert_count || 0);
+  summaryText.textContent = `最高优先级：${highest} · 新增 ${newCount} · 持续 ${sustainedCount} · 结束 ${endedCount}`;
   badge.textContent = `${activeAlerts.length} 项`;
   list.innerHTML = activeAlerts.map((item, index) => `
     <div class="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2">
-      <div class="text-sm font-medium text-gray-800">${index + 1}. ${item.class_name || '未知事件'}</div>
+      <div>
+        <div class="text-sm font-medium text-gray-800">${index + 1}. ${item.class_name || '未知事件'}</div>
+        <div class="text-xs text-gray-500">${item.confirmation_mode || '策略默认'} · 持续 ${Number(item.duration_seconds || 0).toFixed(1)}s</div>
+      </div>
       <span class="stat-badge ${item.state === 'new' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}">
         ${item.state === 'new' ? '新触发' : '持续提示'}
       </span>
@@ -556,7 +561,9 @@ function applyCompletedResult(result) {
   renderActiveAlerts({
     active_alerts: stats.active_alerts || [],
     highest_priority_alert: stats.highest_priority_alert,
-    new_alert_count: stats.new_alert_count || 0
+    new_alert_count: stats.new_alert_count || 0,
+    sustained_alert_count: stats.sustained_alert_count || 0,
+    ended_alert_count: stats.ended_alert_count || 0
   });
 
   if (result.result_video) {

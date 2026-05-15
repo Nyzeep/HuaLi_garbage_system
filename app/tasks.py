@@ -54,6 +54,8 @@ def run_video_task(
         progress = int((processed_frames / total_frames) * 100)
         active_alert_count = int(runtime_state.get("active_alert_count", 0) or 0)
         highest_priority_alert = runtime_state.get("highest_priority_alert")
+        sustained_alert_count = int(runtime_state.get("sustained_alert_count", 0) or 0)
+        ended_alert_count = int(runtime_state.get("ended_alert_count", 0) or 0)
 
         message = f"视频处理中 {progress}%"
         if active_alert_count > 0 and highest_priority_alert:
@@ -68,6 +70,8 @@ def run_video_task(
                 "active_alert_count": active_alert_count,
                 "highest_priority_alert": highest_priority_alert,
                 "new_alert_count": int(runtime_state.get("new_alert_count", 0) or 0),
+                "sustained_alert_count": sustained_alert_count,
+                "ended_alert_count": ended_alert_count,
             },
         )
 
@@ -107,6 +111,8 @@ def run_video_task(
                 "active_alert_count": int(stats.get("active_alert_count", 0) or 0),
                 "highest_priority_alert": stats.get("highest_priority_alert"),
                 "new_alert_count": int(stats.get("new_alert_count", 0) or 0),
+                "sustained_alert_count": int(stats.get("sustained_alert_count", 0) or 0),
+                "ended_alert_count": int(stats.get("ended_alert_count", 0) or 0),
             },
             error_detail=None,
         )

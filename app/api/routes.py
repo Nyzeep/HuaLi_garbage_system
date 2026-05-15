@@ -231,6 +231,8 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
             "active_alert_count": int(runtime_state.get("active_alert_count", 0) or 0),
             "highest_priority_alert": runtime_state.get("highest_priority_alert"),
             "new_alert_count": int(runtime_state.get("new_alert_count", 0) or 0),
+            "sustained_alert_count": int(runtime_state.get("sustained_alert_count", 0) or 0),
+            "ended_alert_count": int(runtime_state.get("ended_alert_count", 0) or 0),
         }
         if record.output_path:
             try:
@@ -256,6 +258,8 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
                 "active_alert_count": payload["active_alert_count"],
                 "highest_priority_alert": payload["highest_priority_alert"],
                 "new_alert_count": payload["new_alert_count"],
+                "sustained_alert_count": payload["sustained_alert_count"],
+                "ended_alert_count": payload["ended_alert_count"],
             }
         return payload
     @router.get("/alerts", response_model=AlertListResponse)
@@ -330,7 +334,6 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         }
 
     return router
-
 
 
 
