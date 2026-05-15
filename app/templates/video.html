@@ -255,6 +255,9 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
                 </svg>
                 停止检测
               </button>
+              <button onclick="clearVideoRecoveryState()" id="btn-clear-state" class="px-6 py-4 rounded-xl border-2 border-slate-200 text-slate-600 font-semibold hover:border-slate-300 hover:text-slate-800 transition-all hidden">
+                清除恢复
+              </button>
             </div>
             
             <!-- Progress -->
@@ -268,6 +271,7 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
               </div>
               <p class="text-xs text-gray-500 mt-2" id="progress-text">等待开始</p>
             </div>
+            <div id="restore-note" class="hidden mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700"></div>
           </div>
         </div>
       </div>
@@ -375,11 +379,133 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
 </main>
 
 <script>
+const VIDEO_TASK_STORAGE_KEY = 'ecoscout.videoTaskState.v1';
+const VIDEO_TASK_TTL_MS = 24 * 60 * 60 * 1000;
+
 let selectedVideo = null;
 let isDetecting = false;
 let startTime = null;
 let currentTaskId = null;
 let pollInterval = null;
+let previewObjectUrl = null;
+
+function safeParseJson(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function loadVideoRecoveryState() {
+  const state = safeParseJson(localStorage.getItem(VIDEO_TASK_STORAGE_KEY));
+  if (!state || typeof state !== 'object') return null;
+  const updatedAt = Number(state.updatedAt || 0);
+  if (!updatedAt || (Date.now() - updatedAt) > VIDEO_TASK_TTL_MS) {
+    localStorage.removeItem(VIDEO_TASK_STORAGE_KEY);
+    return null;
+  }
+  return state;
+}
+
+function saveVideoRecoveryState(partialState) {
+  const prev = loadVideoRecoveryState() || {};
+  const next = {
+    taskId: partialState.taskId ?? prev.taskId ?? null,
+    sourcePage: partialState.sourcePage ?? prev.sourcePage ?? 'video',
+    status: partialState.status ?? prev.status ?? 'pending',
+    progress: Number(partialState.progress ?? prev.progress ?? 0),
+    message: partialState.message ?? prev.message ?? '',
+    startedAt: Number(partialState.startedAt ?? prev.startedAt ?? Date.now()),
+    lastResultVideo: partialState.lastResultVideo ?? prev.lastResultVideo ?? null,
+    lastStats: partialState.lastStats ?? prev.lastStats ?? null,
+    lastActiveAlerts: partialState.lastActiveAlerts ?? prev.lastActiveAlerts ?? [],
+    updatedAt: Date.now(),
+  };
+  localStorage.setItem(VIDEO_TASK_STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
+function clearStoredVideoRecoveryState() {
+  localStorage.removeItem(VIDEO_TASK_STORAGE_KEY);
+}
+
+function setRestoreNote(message, tone = 'info') {
+  const note = document.getElementById('restore-note');
+  if (!message) {
+    note.classList.add('hidden');
+    note.textContent = '';
+    note.className = 'hidden mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700';
+    return;
+  }
+
+  const toneClassMap = {
+    info: 'mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700',
+    warn: 'mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700',
+    success: 'mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700',
+  };
+  note.className = toneClassMap[tone] || toneClassMap.info;
+  note.textContent = message;
+  note.classList.remove('hidden');
+}
+
+function toggleClearStateButton(visible) {
+  document.getElementById('btn-clear-state').classList.toggle('hidden', !visible);
+}
+
+function clearPreviewObjectUrl() {
+  if (previewObjectUrl) {
+    URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = null;
+  }
+}
+
+function setVideoPreviewSource(src, fromObjectUrl = false) {
+  const video = document.getElementById('video-player');
+  if (fromObjectUrl) {
+    clearPreviewObjectUrl();
+    previewObjectUrl = src;
+  }
+  video.src = src;
+  video.classList.remove('hidden');
+  document.getElementById('video-placeholder').classList.add('hidden');
+}
+
+function showRecoveryPlaceholder(message = '检测任务恢复中，原始上传文件无需重新选择。') {
+  const video = document.getElementById('video-player');
+  clearPreviewObjectUrl();
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  video.classList.add('hidden');
+  const placeholder = document.getElementById('video-placeholder');
+  placeholder.classList.remove('hidden');
+  placeholder.innerHTML = `
+    <div class="text-center text-gray-400 px-6">
+      <div class="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center mx-auto mb-6">
+        <svg class="w-12 h-12 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <p class="text-white font-semibold mb-2">视频任务已恢复</p>
+      <p class="text-sm text-gray-400">${message}</p>
+    </div>
+  `;
+}
+
+function restoreDefaultPlaceholder() {
+  document.getElementById('video-placeholder').innerHTML = `
+    <div class="text-center">
+      <div class="w-24 h-24 rounded-full bg-gray-800 flex items-center justify-center mx-auto mb-6">
+        <svg class="w-12 h-12 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <p class="text-gray-500">点击下方上传视频开始检测</p>
+    </div>
+  `;
+}
 
 function renderActiveAlerts(task) {
   const activeAlerts = Array.isArray(task.active_alerts) ? task.active_alerts : [];
@@ -414,45 +540,77 @@ function renderActiveAlerts(task) {
   `).join('');
 }
 
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function showVideoFileInfo(name, sizeText = '恢复任务') {
+  document.getElementById('upload-placeholder').classList.add('hidden');
+  document.getElementById('file-info').classList.remove('hidden');
+  document.getElementById('file-name').textContent = name;
+  document.getElementById('file-size').textContent = sizeText;
+}
+
+function showVideoTaskUi() {
+  document.getElementById('progress-section').classList.remove('hidden');
+  document.getElementById('results-empty').classList.add('hidden');
+  document.getElementById('results-list').classList.remove('hidden');
+  toggleClearStateButton(true);
+}
+
 function handleVideoSelect(event) {
   const file = event.target.files[0];
   if (!file) return;
 
   selectedVideo = file;
-
-  document.getElementById('upload-placeholder').classList.add('hidden');
-  document.getElementById('file-info').classList.remove('hidden');
-  document.getElementById('file-name').textContent = file.name;
-  document.getElementById('file-size').textContent = formatFileSize(file.size);
-
-  const video = document.getElementById('video-player');
-  video.src = URL.createObjectURL(file);
-  video.classList.remove('hidden');
-  document.getElementById('video-placeholder').classList.add('hidden');
-
-  resetStats();
+  clearStoredVideoRecoveryState();
+  setRestoreNote('');
+  showVideoFileInfo(file.name, formatFileSize(file.size));
+  const objectUrl = URL.createObjectURL(file);
+  setVideoPreviewSource(objectUrl, true);
+  resetStats({ preserveRecoveryState: false, preserveSelection: true });
 }
 
 function removeVideo() {
   if (isDetecting) stopDetection();
-
   selectedVideo = null;
   document.getElementById('video-input').value = '';
   document.getElementById('upload-placeholder').classList.remove('hidden');
   document.getElementById('file-info').classList.add('hidden');
 
   const video = document.getElementById('video-player');
-  video.src = '';
+  clearPreviewObjectUrl();
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
   video.classList.add('hidden');
   document.getElementById('video-placeholder').classList.remove('hidden');
+  restoreDefaultPlaceholder();
 
-  resetStats();
+  resetStats({ preserveRecoveryState: false, preserveSelection: false });
+  clearStoredVideoRecoveryState();
+  toggleClearStateButton(false);
+  setRestoreNote('');
 }
 
-function formatFileSize(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function setInProgressUi() {
+  isDetecting = true;
+  document.getElementById('btn-start').classList.add('hidden');
+  document.getElementById('btn-stop').classList.remove('hidden');
+  document.getElementById('video-processing').classList.remove('hidden');
+  showVideoTaskUi();
+}
+
+function setIdleUi({ keepProgress = false } = {}) {
+  isDetecting = false;
+  document.getElementById('btn-start').classList.remove('hidden');
+  document.getElementById('btn-stop').classList.add('hidden');
+  document.getElementById('video-processing').classList.add('hidden');
+  if (!keepProgress) {
+    document.getElementById('progress-section').classList.add('hidden');
+  }
 }
 
 async function startDetection() {
@@ -462,16 +620,10 @@ async function startDetection() {
   }
   if (isDetecting) return;
 
-  isDetecting = true;
   startTime = Date.now();
-
-  document.getElementById('btn-start').classList.add('hidden');
-  document.getElementById('btn-stop').classList.remove('hidden');
-  document.getElementById('video-processing').classList.remove('hidden');
-  document.getElementById('progress-section').classList.remove('hidden');
-  document.getElementById('results-empty').classList.add('hidden');
-  document.getElementById('results-list').classList.remove('hidden');
+  setInProgressUi();
   document.getElementById('results-list').innerHTML = '';
+  setRestoreNote('视频任务已提交，离开页面后返回仍可继续查看进度。', 'info');
 
   const formData = new FormData();
   formData.append('file', selectedVideo);
@@ -482,12 +634,24 @@ async function startDetection() {
       method: 'POST',
       body: formData
     });
-    const data = await response.json();
-    if (!response.ok || !data.success) {
-      throw new Error(data.error || '提交失败');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success || !data.task_id) {
+      throw new Error(data.error || data.detail || data.message || '提交失败');
     }
-    currentTaskId = data.task_id;
-    pollTaskStatus();
+    currentTaskId = String(data.task_id);
+    saveVideoRecoveryState({
+      taskId: currentTaskId,
+      sourcePage: 'video',
+      status: data.status || 'pending',
+      progress: 0,
+      message: data.message || '任务已提交',
+      startedAt: startTime,
+      lastResultVideo: null,
+      lastStats: null,
+      lastActiveAlerts: [],
+    });
+    toggleClearStateButton(true);
+    await pollTaskStatus(currentTaskId);
   } catch (error) {
     console.error('提交视频失败:', error);
     addResult({
@@ -498,44 +662,55 @@ async function startDetection() {
       frame: '-'
     });
     alert(`提交失败: ${error.message}`);
+    clearStoredVideoRecoveryState();
     finalizeDetectionUi();
   }
 }
 
-function pollTaskStatus() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(async () => {
-    if (!currentTaskId) return;
-    try {
-      const resp = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}`);
-      const task = await resp.json();
-      if (!resp.ok) throw new Error(task.error);
+async function pollTaskStatus(taskId) {
+  if (!taskId) return;
 
-      // 更新进度
-      document.getElementById('progress-percent').textContent = `${task.progress}%`;
-      document.getElementById('progress-bar').style.width = `${task.progress}%`;
-      document.getElementById('progress-text').textContent = task.message;
-      document.getElementById('processing-text').textContent = task.message;
-      if (startTime) {
-        const elapsed = Math.floor((Date.now() - startTime) / 1000);
-        document.getElementById('stat-duration').textContent = `${elapsed}s`;
+  currentTaskId = String(taskId);
+  if (pollInterval) clearTimeout(pollInterval);
+
+  const loop = async () => {
+    if (!isDetecting || !currentTaskId) return;
+    try {
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(currentTaskId)}?t=${Date.now()}`, { cache: 'no-store' });
+      const task = await resp.json().catch(() => ({}));
+      if (resp.status === 404) {
+        clearStoredVideoRecoveryState();
+        throw new Error('任务不存在或已过期');
       }
-      renderActiveAlerts(task);
+      if (!resp.ok) throw new Error(task.detail || task.error || task.message || '任务状态查询失败');
+
+      updateTaskProgressUi(task);
+      saveVideoRecoveryState({
+        taskId: currentTaskId,
+        sourcePage: 'video',
+        status: task.status,
+        progress: task.progress,
+        message: task.message || '',
+        startedAt: startTime || Date.now(),
+        lastResultVideo: task.result_video || null,
+        lastStats: task.stats || null,
+        lastActiveAlerts: task.active_alerts || [],
+      });
 
       if (task.status === 'completed') {
-        clearInterval(pollInterval);
-        pollInterval = null;
         applyCompletedResult(task);
         finalizeDetectionUi(true);
-      } else if (task.status === 'failed') {
-        clearInterval(pollInterval);
-        pollInterval = null;
-        throw new Error(task.message);
+        setRestoreNote('已恢复最近一次完成的视频检测结果。', 'success');
+        return;
       }
+      if (task.status === 'failed') {
+        clearStoredVideoRecoveryState();
+        throw new Error(task.message || '视频处理失败');
+      }
+
+      pollInterval = setTimeout(loop, 1200);
     } catch (error) {
       console.error('轮询失败:', error);
-      clearInterval(pollInterval);
-      pollInterval = null;
       addResult({
         class_id: 'warning',
         class_name: `处理失败: ${error.message}`,
@@ -544,9 +719,25 @@ function pollTaskStatus() {
         frame: '-'
       });
       alert(`处理失败: ${error.message}`);
+      clearStoredVideoRecoveryState();
       finalizeDetectionUi();
     }
-  }, 1500);
+  };
+
+  await loop();
+}
+
+function updateTaskProgressUi(task) {
+  const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+  document.getElementById('progress-percent').textContent = `${progress}%`;
+  document.getElementById('progress-bar').style.width = `${progress}%`;
+  document.getElementById('progress-text').textContent = task.message || `处理中 ${progress}%`;
+  document.getElementById('processing-text').textContent = task.message || '处理中...';
+  if (startTime) {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    document.getElementById('stat-duration').textContent = `${elapsed}s`;
+  }
+  renderActiveAlerts(task);
 }
 
 function applyCompletedResult(result) {
@@ -566,15 +757,19 @@ function applyCompletedResult(result) {
     ended_alert_count: stats.ended_alert_count || 0
   });
 
+  document.getElementById('progress-percent').textContent = '100%';
+  document.getElementById('progress-bar').style.width = '100%';
+  document.getElementById('progress-text').textContent = '处理完成';
+  document.getElementById('processing-text').textContent = '处理完成';
+
   if (result.result_video) {
-    const videoUrl = `/uploads/${result.result_video}`;
+    setVideoPreviewSource(`/uploads/${result.result_video}`);
     const videoPlayer = document.getElementById('video-player');
-    videoPlayer.src = videoUrl;
-    videoPlayer.classList.remove('hidden');
-    document.getElementById('video-placeholder').classList.add('hidden');
     videoPlayer.play().catch(() => {
       // Ignore autoplay blocks by browser policy.
     });
+  } else {
+    showRecoveryPlaceholder('任务已完成，但当前没有可播放的结果视频。');
   }
 
   const alertTypeMap = {
@@ -597,6 +792,7 @@ function applyCompletedResult(result) {
   const primaryKey = normalized.length === 1 ? normalized[0].key : 'warning';
   const reasonText = uniqueLabels.length > 0 ? uniqueLabels.join('、') : '历史任务未记录类型';
 
+  document.getElementById('results-list').innerHTML = '';
   addResult({
     class_id: stats.total_alerts > 0 ? primaryKey : 'normal',
     class_name: stats.total_alerts > 0 ? `检测到异常：${reasonText}` : '检测完成，未发现异常',
@@ -609,27 +805,25 @@ function applyCompletedResult(result) {
 function stopDetection() {
   if (!isDetecting) return;
   isDetecting = false;
-  if (pollInterval) clearInterval(pollInterval);
+  if (pollInterval) clearTimeout(pollInterval);
   pollInterval = null;
-  finalizeDetectionUi();
-  document.getElementById('processing-text').textContent = '已停止检测';
+  finalizeDetectionUi(false, { clearTaskId: false, keepProgress: true });
+  setRestoreNote('已停止当前页面轮询，后台任务可能仍在继续，可稍后返回恢复。', 'warn');
 }
 
-function finalizeDetectionUi(completed = false) {
+function finalizeDetectionUi(completed = false, options = {}) {
+  const { clearTaskId = true, keepProgress = completed } = options;
   isDetecting = false;
-  currentTaskId = null;
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = null;
-
-  document.getElementById('btn-start').classList.remove('hidden');
-  document.getElementById('btn-stop').classList.add('hidden');
-  document.getElementById('video-processing').classList.add('hidden');
-  if (!completed) {
-    document.getElementById('progress-section').classList.add('hidden');
+  if (clearTaskId) {
+    currentTaskId = null;
   }
+  if (pollInterval) clearTimeout(pollInterval);
+  pollInterval = null;
+  setIdleUi({ keepProgress });
 }
 
-function resetStats() {
+function resetStats(options = {}) {
+  const { preserveRecoveryState = false, preserveSelection = false } = options;
   document.getElementById('stat-frames').textContent = '0';
   document.getElementById('stat-detected').textContent = '0';
   document.getElementById('stat-alerts').textContent = '0';
@@ -637,14 +831,25 @@ function resetStats() {
   document.getElementById('progress-percent').textContent = '0%';
   document.getElementById('progress-bar').style.width = '0%';
   document.getElementById('progress-text').textContent = '等待开始';
+  document.getElementById('processing-text').textContent = '准备...';
   document.getElementById('results-list').innerHTML = '';
   document.getElementById('results-empty').classList.remove('hidden');
   document.getElementById('results-list').classList.add('hidden');
   document.getElementById('active-alert-summary').classList.add('hidden');
   document.getElementById('active-alert-list').innerHTML = '';
-  if (pollInterval) clearInterval(pollInterval);
+  if (pollInterval) clearTimeout(pollInterval);
   pollInterval = null;
   currentTaskId = null;
+  startTime = null;
+  setIdleUi({ keepProgress: false });
+  toggleClearStateButton(false);
+  setRestoreNote('');
+  if (!preserveRecoveryState) {
+    clearStoredVideoRecoveryState();
+  }
+  if (!preserveSelection) {
+    selectedVideo = null;
+  }
 }
 
 function addResult(result) {
@@ -681,6 +886,52 @@ function addResult(result) {
   document.getElementById('results-list').classList.remove('hidden');
 }
 
+function restoreVideoTaskStateFromTask(task) {
+  const startedAt = Number(task.startedAt || Date.now());
+  startTime = startedAt;
+  currentTaskId = task.taskId || null;
+  showVideoTaskUi();
+  toggleClearStateButton(true);
+
+  if (task.status === 'completed' && task.lastResultVideo) {
+    showVideoFileInfo('最近一次完成的视频任务', '恢复结果');
+    applyCompletedResult({
+      result_video: task.lastResultVideo,
+      stats: task.lastStats || {},
+      active_alerts: task.lastActiveAlerts || [],
+    });
+    finalizeDetectionUi(true, { clearTaskId: false, keepProgress: true });
+    setRestoreNote('已恢复最近一次完成的视频检测结果。', 'success');
+    return;
+  }
+
+  showVideoFileInfo('恢复中的视频任务', '原文件无需重新上传');
+  showRecoveryPlaceholder();
+  setInProgressUi();
+  updateTaskProgressUi({
+    progress: task.progress || 0,
+    message: task.message || '任务恢复中...',
+    active_alerts: task.lastActiveAlerts || [],
+    highest_priority_alert: (task.lastActiveAlerts || [])[0]?.class_name || null,
+  });
+  setRestoreNote('已恢复后台视频任务进度，正在继续获取最新状态。', 'info');
+  pollTaskStatus(task.taskId);
+}
+
+function restoreVideoRecoveryStateIfNeeded() {
+  const task = loadVideoRecoveryState();
+  if (!task || !task.taskId) {
+    return;
+  }
+  restoreVideoTaskStateFromTask(task);
+}
+
+function clearVideoRecoveryState() {
+  clearStoredVideoRecoveryState();
+  removeVideo();
+  setRestoreNote('已清除本地视频恢复状态。', 'success');
+}
+
 const uploadZone = document.getElementById('upload-zone');
 uploadZone.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -698,6 +949,26 @@ uploadZone.addEventListener('drop', (e) => {
     handleVideoSelect({ target: { files: [file] } });
   }
 });
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== VIDEO_TASK_STORAGE_KEY) return;
+  const state = loadVideoRecoveryState();
+  if (!state) {
+    resetStats({ preserveRecoveryState: true, preserveSelection: false });
+    restoreDefaultPlaceholder();
+    return;
+  }
+  if (!currentTaskId || currentTaskId !== state.taskId) {
+    restoreVideoTaskStateFromTask(state);
+  }
+});
+
+window.addEventListener('beforeunload', () => {
+  isDetecting = false;
+  if (pollInterval) clearTimeout(pollInterval);
+});
+
+restoreVideoRecoveryStateIfNeeded();
 </script>
 
 </body>
