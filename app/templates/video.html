@@ -344,6 +344,17 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
             检测结果
           </h2>
 
+          <div id="active-alert-summary" class="hidden mb-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div class="flex items-center justify-between gap-3 mb-2">
+              <div>
+                <div class="font-bold text-red-700">当前激活报警</div>
+                <div class="text-sm text-red-600" id="active-alert-summary-text">暂无报警</div>
+              </div>
+              <span id="active-alert-count-badge" class="stat-badge bg-red-100 text-red-600">0 项</span>
+            </div>
+            <div id="active-alert-list" class="space-y-2"></div>
+          </div>
+
           <div id="results-empty" class="text-center py-8">
             <div class="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
               <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -369,6 +380,34 @@ let isDetecting = false;
 let startTime = null;
 let currentTaskId = null;
 let pollInterval = null;
+
+function renderActiveAlerts(task) {
+  const activeAlerts = Array.isArray(task.active_alerts) ? task.active_alerts : [];
+  const summary = document.getElementById('active-alert-summary');
+  const summaryText = document.getElementById('active-alert-summary-text');
+  const badge = document.getElementById('active-alert-count-badge');
+  const list = document.getElementById('active-alert-list');
+
+  if (!activeAlerts.length) {
+    summary.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  summary.classList.remove('hidden');
+  const highest = task.highest_priority_alert || activeAlerts[0].class_name || '未知事件';
+  const newCount = Number(task.new_alert_count || 0);
+  summaryText.textContent = `最高优先级：${highest}${newCount > 0 ? ` · 本轮新增 ${newCount} 项` : ''}`;
+  badge.textContent = `${activeAlerts.length} 项`;
+  list.innerHTML = activeAlerts.map((item, index) => `
+    <div class="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2">
+      <div class="text-sm font-medium text-gray-800">${index + 1}. ${item.class_name || '未知事件'}</div>
+      <span class="stat-badge ${item.state === 'new' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}">
+        ${item.state === 'new' ? '新触发' : '持续提示'}
+      </span>
+    </div>
+  `).join('');
+}
 
 function handleVideoSelect(event) {
   const file = event.target.files[0];
@@ -472,6 +511,11 @@ function pollTaskStatus() {
       document.getElementById('progress-bar').style.width = `${task.progress}%`;
       document.getElementById('progress-text').textContent = task.message;
       document.getElementById('processing-text').textContent = task.message;
+      if (startTime) {
+        const elapsed = Math.floor((Date.now() - startTime) / 1000);
+        document.getElementById('stat-duration').textContent = `${elapsed}s`;
+      }
+      renderActiveAlerts(task);
 
       if (task.status === 'completed') {
         clearInterval(pollInterval);
@@ -509,6 +553,11 @@ function applyCompletedResult(result) {
   document.getElementById('stat-frames').textContent = stats.total_frames || 0;
   document.getElementById('stat-detected').textContent = stats.total_detections || 0;
   document.getElementById('stat-alerts').textContent = stats.total_alerts || 0;
+  renderActiveAlerts({
+    active_alerts: stats.active_alerts || [],
+    highest_priority_alert: stats.highest_priority_alert,
+    new_alert_count: stats.new_alert_count || 0
+  });
 
   if (result.result_video) {
     const videoUrl = `/uploads/${result.result_video}`;
@@ -584,6 +633,8 @@ function resetStats() {
   document.getElementById('results-list').innerHTML = '';
   document.getElementById('results-empty').classList.remove('hidden');
   document.getElementById('results-list').classList.add('hidden');
+  document.getElementById('active-alert-summary').classList.add('hidden');
+  document.getElementById('active-alert-list').innerHTML = '';
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = null;
   currentTaskId = null;

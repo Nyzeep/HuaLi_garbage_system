@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -211,6 +212,13 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         if record is None:
             raise HTTPException(status_code=404, detail="Task not found")
 
+        try:
+            runtime_state = json.loads(record.runtime_state or "{}")
+            if not isinstance(runtime_state, dict):
+                runtime_state = {}
+        except Exception:
+            runtime_state = {}
+
         payload = {
             "success": True,
             "task_id": task_id,
@@ -219,6 +227,10 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
             "message": record.message,
             "result_video": None,
             "stats": None,
+            "active_alerts": runtime_state.get("active_alerts", []),
+            "active_alert_count": int(runtime_state.get("active_alert_count", 0) or 0),
+            "highest_priority_alert": runtime_state.get("highest_priority_alert"),
+            "new_alert_count": int(runtime_state.get("new_alert_count", 0) or 0),
         }
         if record.output_path:
             try:
@@ -240,6 +252,10 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
                 "suppressed_alerts": suppressed_alerts,
                 "alert_types": alert_types,
                 "video_info": video_info,
+                "active_alerts": payload["active_alerts"],
+                "active_alert_count": payload["active_alert_count"],
+                "highest_priority_alert": payload["highest_priority_alert"],
+                "new_alert_count": payload["new_alert_count"],
             }
         return payload
     @router.get("/alerts", response_model=AlertListResponse)
@@ -314,7 +330,6 @@ def build_api_router(settings: Settings, started_at: str) -> APIRouter:
         }
 
     return router
-
 
 
 

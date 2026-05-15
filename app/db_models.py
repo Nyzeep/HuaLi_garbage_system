@@ -60,5 +60,5 @@ class VideoTaskRecord(Base):
     total_detections: Mapped[int] = mapped_column(Integer, default=0)
     total_alerts: Mapped[int] = mapped_column(Integer, default=0)
     video_info: Mapped[str] = mapped_column(String(128), default="")
+    runtime_state: Mapped[str] = mapped_column(Text, default="{}")
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-

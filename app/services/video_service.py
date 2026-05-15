@@ -1,8 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import imageio
+import numpy as np
+from PIL import Image, ImageDraw
 
 from app.services.detection_service import DetectionService
 from app.upgrade import AlarmEngine, DetectionEngine, TrackEngine, UpgradePipeline
@@ -12,27 +16,36 @@ class VideoProcessingError(RuntimeError):
     pass
 
 
-class VideoProcessingService:
+@dataclass
+class MemoryEvent:
+    class_id: int
+    class_name: str
+    priority: int
+    first_seen_ts: float
+    last_triggered_ts: float
+    track_id: int | None = None
+    bbox: list[int] | None = None
+    state: str = "remembered"
+
+
+class VideoEventStateManager:
     VIDEO_IOU_MATCH_THRESHOLD = 0.4
-    VIDEO_GARBAGE_COOLDOWN_SECONDS = 3.0  # overflow/garbage
-    VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS = 1.0  # fire/smoke
-    VIDEO_FIRE_SMOKE_MIN_CONFIRM_FRAMES = 2
-    VIDEO_FIRE_SMOKE_HIGH_CONF_BYPASS = 0.60
+    CLASS_PRIORITIES = {
+        3: 0,  # fire
+        4: 1,  # smoke
+        2: 2,  # garbage
+        1: 3,  # overflow
+    }
+    COOLDOWN_SECONDS = {
+        3: 2.0,
+        4: 2.0,
+        2: 3.0,
+        1: 4.0,
+    }
 
-    def __init__(self, detection_service: DetectionService):
-        self.detection_service = detection_service
-        # New upgrade pipeline is integrated as a non-breaking sidecar layer.
-        # It consumes existing detections and adds track/alarm metadata.
-        self.upgrade_pipeline = UpgradePipeline(
-            detection_engine=DetectionEngine(detection_service),
-            track_engine=TrackEngine(),
-            alarm_engine=AlarmEngine(min_consecutive_frames=2),
-        )
-
-    @staticmethod
-    def _bgr_to_rgb(frame):
-        # OpenCV uses BGR, while imageio/ffmpeg writer expects RGB arrays.
-        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    def __init__(self) -> None:
+        self.memory_events: list[MemoryEvent] = []
+        self.alert_history: list[dict] = []
 
     @staticmethod
     def _compute_iou(box1: list[int], box2: list[int]) -> float:
@@ -47,141 +60,219 @@ class VideoProcessingService:
         return inter / union if union > 0 else 0.0
 
     def _cooldown_seconds_for_class(self, class_id: int) -> float:
-        if class_id in (3, 4):  # fire / smoke
-            return self.VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS
-        if class_id in (1, 2):  # overflow / garbage
-            return self.VIDEO_GARBAGE_COOLDOWN_SECONDS
-        return 0.0
+        return self.COOLDOWN_SECONDS.get(class_id, 0.0)
 
-    def _apply_video_alert_cooldown(
-        self,
-        detections: list[dict],
-        current_ts: float,
-        alert_history: list[dict],
-    ) -> tuple[list[dict], int]:
-        """
-        Video-only cooldown:
-        - overflow/garbage: same object won't re-alert within 3s
-        - fire/smoke: same object won't re-alert within 1s
-        - same object match priority: track_id (stable) > bbox IoU fallback
-        """
+    def _priority_for_class(self, class_id: int) -> int:
+        return self.CLASS_PRIORITIES.get(class_id, 99)
+
+    def _find_recent_match(self, detection: dict, current_ts: float) -> dict | None:
+        class_id = int(detection.get("class_id", -1))
+        cooldown = self._cooldown_seconds_for_class(class_id)
+        if cooldown <= 0:
+            return None
+
+        bbox = detection.get("bbox", [])
+        track_id = detection.get("track_id")
+        for rec in self.alert_history:
+            if int(rec.get("class_id", -1)) != class_id:
+                continue
+            if current_ts - float(rec.get("timestamp", 0.0)) > cooldown:
+                continue
+            rec_tid = rec.get("track_id")
+            if (track_id is not None) and (rec_tid is not None):
+                if int(track_id) == int(rec_tid):
+                    return rec
+                continue
+            rec_bbox = rec.get("bbox") or []
+            if bbox and rec_bbox and self._compute_iou(bbox, rec_bbox) >= self.VIDEO_IOU_MATCH_THRESHOLD:
+                return rec
+        return None
+
+    def _remember_event(self, detection: dict, current_ts: float, state: str) -> None:
+        class_id = int(detection.get("class_id", -1))
+        class_name = str(detection.get("class_name", "unknown"))
+        track_id = detection.get("track_id")
+        bbox = detection.get("bbox") or None
+
+        for event in self.memory_events:
+            if event.class_id != class_id:
+                continue
+            if (track_id is not None) and (event.track_id is not None) and int(track_id) == int(event.track_id):
+                event.class_name = class_name
+                event.last_triggered_ts = current_ts
+                event.bbox = bbox
+                event.state = state
+                return
+            if bbox and event.bbox and self._compute_iou(bbox, event.bbox) >= self.VIDEO_IOU_MATCH_THRESHOLD:
+                event.class_name = class_name
+                event.last_triggered_ts = current_ts
+                event.track_id = int(track_id) if track_id is not None else event.track_id
+                event.bbox = bbox
+                event.state = state
+                return
+
+        self.memory_events.append(
+            MemoryEvent(
+                class_id=class_id,
+                class_name=class_name,
+                priority=self._priority_for_class(class_id),
+                first_seen_ts=current_ts,
+                last_triggered_ts=current_ts,
+                track_id=int(track_id) if track_id is not None else None,
+                bbox=bbox,
+                state=state,
+            )
+        )
+
+    def apply(self, detections: list[dict], current_ts: float) -> tuple[list[dict], dict]:
         updated: list[dict] = []
+        new_alert_count = 0
         suppressed_count = 0
 
         for det in detections:
             item = det.copy()
+            item["new_alert"] = False
+            item["active_memory"] = False
+
             if not item.get("alert", False):
                 updated.append(item)
                 continue
 
             class_id = int(item.get("class_id", -1))
-            cooldown = self._cooldown_seconds_for_class(class_id)
-            if cooldown <= 0:
+            if class_id not in self.COOLDOWN_SECONDS:
                 updated.append(item)
                 continue
 
-            bbox = item.get("bbox", [])
-            track_id = item.get("track_id")
-            has_recent_same_object = False
-            for rec in alert_history:
-                if rec["class_id"] != class_id:
-                    continue
-                if current_ts - rec["timestamp"] > cooldown:
-                    continue
-                # Prefer tracker identity match to avoid repeated alerts caused by
-                # bbox jitter on the same object across adjacent frames.
-                rec_tid = rec.get("track_id")
-                if (track_id is not None) and (rec_tid is not None):
-                    if int(track_id) == int(rec_tid):
-                        has_recent_same_object = True
-                        break
-                    continue
-                if self._compute_iou(bbox, rec["bbox"]) >= self.VIDEO_IOU_MATCH_THRESHOLD:
-                    has_recent_same_object = True
-                    break
-
-            if has_recent_same_object:
-                item["alert"] = False
-                suppressed_count += 1
-            else:
-                alert_history.append(
+            recent = self._find_recent_match(item, current_ts)
+            if recent is None:
+                item["new_alert"] = True
+                item["active_memory"] = True
+                new_alert_count += 1
+                self.alert_history.append(
                     {
                         "class_id": class_id,
-                        "bbox": bbox,
+                        "bbox": item.get("bbox", []),
                         "timestamp": current_ts,
-                        "track_id": int(track_id) if track_id is not None else None,
+                        "track_id": int(item["track_id"]) if item.get("track_id") is not None else None,
                     }
                 )
+                self._remember_event(item, current_ts=current_ts, state="new")
+            else:
+                item["alert"] = False
+                item["active_memory"] = True
+                suppressed_count += 1
+                self._remember_event(item, current_ts=float(recent["timestamp"]), state="remembered")
+
             updated.append(item)
 
-        # Keep alert history bounded to reduce growth.
-        max_keep_window = max(
-            self.VIDEO_GARBAGE_COOLDOWN_SECONDS,
-            self.VIDEO_FIRE_SMOKE_COOLDOWN_SECONDS,
-        )
-        alert_history[:] = [
-            rec for rec in alert_history if current_ts - rec["timestamp"] <= max_keep_window
+        max_keep_window = max(self.COOLDOWN_SECONDS.values(), default=0.0)
+        self.alert_history[:] = [
+            rec for rec in self.alert_history if current_ts - float(rec.get("timestamp", 0.0)) <= max_keep_window
         ]
-        return updated, suppressed_count
+
+        active_alerts = self.get_active_alerts()
+        summary = {
+            "active_alerts": active_alerts,
+            "active_alert_count": len(active_alerts),
+            "highest_priority_alert": active_alerts[0]["class_name"] if active_alerts else None,
+            "new_alert_count": new_alert_count,
+            "suppressed_alerts": suppressed_count,
+        }
+        return updated, summary
+
+    def get_active_alerts(self) -> list[dict]:
+        active = sorted(
+            self.memory_events,
+            key=lambda item: (item.priority, item.first_seen_ts),
+        )
+        return [
+            {
+                "class_id": item.class_id,
+                "class_name": item.class_name,
+                "priority": item.priority,
+                "state": item.state,
+            }
+            for item in active
+        ]
+
+    def mark_frame_complete(self) -> None:
+        for event in self.memory_events:
+            if event.state == "new":
+                event.state = "remembered"
+
+
+class VideoProcessingService:
+    def __init__(self, detection_service: DetectionService):
+        self.detection_service = detection_service
+        self.upgrade_pipeline = UpgradePipeline(
+            detection_engine=DetectionEngine(detection_service),
+            track_engine=TrackEngine(),
+            alarm_engine=AlarmEngine(min_consecutive_frames=1),
+        )
+        self.event_state = VideoEventStateManager()
+
+    @staticmethod
+    def _bgr_to_rgb(frame: np.ndarray) -> np.ndarray:
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     def _attach_upgrade_metadata(
         self,
         detections: list[dict],
         timestamp: float | None = None,
     ) -> tuple[list[dict], int]:
-        """Attach track_id from upgrade pipeline without changing existing alert semantics."""
         pipe_result = self.upgrade_pipeline.run_detections(detections, timestamp=timestamp)
         tracks = pipe_result.tracks
         alarms = pipe_result.alarms
 
-        # Keep index alignment with tracker output to avoid key-collision ambiguity.
         out: list[dict] = []
         for idx, det in enumerate(detections):
             item = det.copy()
             if idx < len(tracks):
                 item["track_id"] = int(tracks[idx].track_id)
             out.append(item)
-
         return out, len(alarms)
 
-    def _apply_fire_smoke_temporal_confirmation(
-        self,
-        detections: list[dict],
-        streak_state: dict[tuple[int, int], int],
-    ) -> list[dict]:
-        """
-        Keep fire/smoke alert only after the same tracked object appears
-        for enough consecutive processed frames.
-        """
-        active_keys: set[tuple[int, int]] = set()
-        out: list[dict] = []
+    def _render_alert_panel(self, image: np.ndarray, active_alerts: list[dict]) -> np.ndarray:
+        if not active_alerts:
+            return image
+
+        pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img, "RGBA")
+        font_title = self.detection_service._load_chinese_font(size=22)
+        font_line = self.detection_service._load_chinese_font(size=18)
+
+        width, height = pil_img.size
+        line_height = 30
+        panel_width = min(380, max(260, int(width * 0.38)))
+        panel_height = 58 + len(active_alerts) * line_height
+        left = max(12, width - panel_width - 18)
+        top = max(12, height - panel_height - 18)
+        right = width - 18
+        bottom = height - 18
+
+        draw.rounded_rectangle([left, top, right, bottom], radius=18, fill=(120, 0, 0, 180))
+        draw.text((left + 16, top + 12), "报警事件", fill=(255, 255, 255), font=font_title)
+
+        y = top + 44
+        for idx, alert in enumerate(active_alerts, start=1):
+            state_text = "新触发" if alert.get("state") == "new" else "持续提示"
+            text = f"{idx}. {alert.get('class_name', '未知事件')}  {state_text}"
+            draw.text((left + 16, y), text, fill=(255, 236, 236), font=font_line)
+            y += line_height
+
+        return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    def _draw_video_frame(self, image: np.ndarray, detections: list[dict], active_alerts: list[dict]) -> np.ndarray:
+        visual_detections: list[dict] = []
         for det in detections:
             item = det.copy()
-            cid = int(item.get("class_id", -1))
-            if not item.get("alert", False) or cid not in (3, 4):
-                out.append(item)
-                continue
+            if item.get("active_memory", False):
+                item["alert"] = True
+                item["color"] = (0, 0, 255)
+            visual_detections.append(item)
 
-            tid = item.get("track_id")
-            if tid is None:
-                item["alert"] = False
-                out.append(item)
-                continue
-
-            key = (cid, int(tid))
-            active_keys.add(key)
-            count = int(streak_state.get(key, 0)) + 1
-            streak_state[key] = count
-            conf = float(item.get("confidence", 0.0))
-            high_conf_bypass = conf >= self.VIDEO_FIRE_SMOKE_HIGH_CONF_BYPASS
-            if (not high_conf_bypass) and count < self.VIDEO_FIRE_SMOKE_MIN_CONFIRM_FRAMES:
-                item["alert"] = False
-            out.append(item)
-
-        for key in list(streak_state.keys()):
-            if key not in active_keys:
-                streak_state.pop(key, None)
-        return out
+        rendered = self.detection_service.draw_boxes(image, visual_detections)
+        return self._render_alert_panel(rendered, active_alerts)
 
     def process_video(
         self,
@@ -189,6 +280,7 @@ class VideoProcessingService:
         output_path: Path,
         skip_frames: int,
         progress_callback=None,
+        status_callback=None,
     ) -> dict:
         cap = cv2.VideoCapture(str(input_path))
         if not cap.isOpened():
@@ -205,13 +297,17 @@ class VideoProcessingService:
         total_detections = 0
         total_alerts = 0
         total_suppressed_alerts = 0
-        alert_type_set: set[str] = set()
+        total_pipeline_alarms = 0
         alert_frames = 0
+        alert_type_set: set[str] = set()
         prev_result = None
         effective_skip = max(skip_frames, 1)
-        alert_history: list[dict] = []
-        fire_smoke_streak: dict[tuple[int, int], int] = {}
-        total_pipeline_alarms = 0
+        latest_runtime_state = {
+            "active_alerts": [],
+            "active_alert_count": 0,
+            "highest_priority_alert": None,
+            "new_alert_count": 0,
+        }
 
         writer = imageio.get_writer(
             str(output_path),
@@ -228,8 +324,6 @@ class VideoProcessingService:
                     break
 
                 frame_count += 1
-                # Detect on frame 1, 1+skip, 1+2*skip ...
-                # When skip_frames=1, every frame is processed.
                 if (frame_count - 1) % effective_skip != 0:
                     frame_to_write = prev_result if prev_result is not None else frame
                     writer.append_data(self._bgr_to_rgb(frame_to_write))
@@ -243,26 +337,32 @@ class VideoProcessingService:
                     detections,
                     timestamp=current_ts,
                 )
-                detections = self._apply_fire_smoke_temporal_confirmation(
-                    detections=detections,
-                    streak_state=fire_smoke_streak,
-                )
-                detections, suppressed_this_frame = self._apply_video_alert_cooldown(
+                detections, runtime_state = self.event_state.apply(
                     detections=detections,
                     current_ts=current_ts,
-                    alert_history=alert_history,
                 )
-                total_suppressed_alerts += int(suppressed_this_frame)
-                total_pipeline_alarms += pipeline_alarm_count
 
-                rendered = self.detection_service.draw_boxes(frame, detections)
+                total_pipeline_alarms += int(pipeline_alarm_count)
+                total_suppressed_alerts += int(runtime_state.get("suppressed_alerts", 0))
+                latest_runtime_state = {
+                    "active_alerts": runtime_state.get("active_alerts", []),
+                    "active_alert_count": int(runtime_state.get("active_alert_count", 0) or 0),
+                    "highest_priority_alert": runtime_state.get("highest_priority_alert"),
+                    "new_alert_count": int(runtime_state.get("new_alert_count", 0) or 0),
+                }
+
+                rendered = self._draw_video_frame(
+                    frame,
+                    detections=detections,
+                    active_alerts=latest_runtime_state["active_alerts"],
+                )
                 prev_result = rendered.copy()
 
-                frame_alerts = sum(1 for item in detections if item.get("alert", False))
+                frame_alerts = sum(1 for item in detections if item.get("new_alert", False))
                 for item in detections:
-                    if item.get("alert", False):
+                    if item.get("active_memory", False):
                         alert_type_set.add(str(item.get("class_name", "unknown")))
-                if frame_alerts > 0:
+                if latest_runtime_state["active_alert_count"] > 0:
                     alert_frames += 1
                 total_alerts += frame_alerts
                 total_detections += len(detections)
@@ -294,14 +394,26 @@ class VideoProcessingService:
                     (150, 220, 255),
                     2,
                 )
+
                 writer.append_data(self._bgr_to_rgb(rendered))
 
+                if status_callback is not None:
+                    status_callback(
+                        {
+                            **latest_runtime_state,
+                            "processed_frames": frame_count,
+                            "total_frames": total_frames,
+                        }
+                    )
                 if progress_callback and total_frames:
                     progress_callback(frame_count, total_frames)
+
+                self.event_state.mark_frame_complete()
         finally:
             writer.close()
             cap.release()
 
+        final_active_alerts = self.event_state.get_active_alerts()
         return {
             "total_frames": frame_count,
             "detected_frames": alert_frames,
@@ -310,4 +422,8 @@ class VideoProcessingService:
             "suppressed_alerts": total_suppressed_alerts,
             "alert_types": sorted(alert_type_set),
             "video_info": f"{width}x{height}, {fps:.1f}fps, suppressed={total_suppressed_alerts}",
+            "active_alerts": final_active_alerts,
+            "active_alert_count": len(final_active_alerts),
+            "highest_priority_alert": final_active_alerts[0]["class_name"] if final_active_alerts else None,
+            "new_alert_count": 0,
         }

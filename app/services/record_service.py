@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime
+import json
 from pathlib import Path
 import re
 
@@ -17,6 +18,20 @@ from app.utils import frame_to_base64, relative_to, save_image
 class RecordService:
     def __init__(self, uploads_dir: Path):
         self.uploads_dir = uploads_dir
+
+    @staticmethod
+    def _serialize_runtime_state(runtime_state: dict | None) -> str:
+        return json.dumps(runtime_state or {}, ensure_ascii=False)
+
+    @staticmethod
+    def _deserialize_runtime_state(raw_value: str | None) -> dict:
+        if not raw_value:
+            return {}
+        try:
+            value = json.loads(raw_value)
+        except Exception:
+            return {}
+        return value if isinstance(value, dict) else {}
 
     def create_alert_record(
         self,
@@ -142,6 +157,10 @@ class RecordService:
             "total_alerts": int(record.alert_count or 0),
             "suppressed_alerts": 0,
             "video_info": "",
+            "active_alerts": [],
+            "active_alert_count": 0,
+            "highest_priority_alert": None,
+            "new_alert_count": 0,
         }
         if task is not None:
             if task.output_path:
@@ -161,6 +180,7 @@ class RecordService:
                 "suppressed_alerts": suppressed_alerts,
                 "video_info": video_info,
             }
+            stats.update(self._deserialize_runtime_state(task.runtime_state))
 
         payload["detail_type"] = "video"
         payload["task_id"] = task_id or None
@@ -269,6 +289,7 @@ class RecordService:
                 input_path=input_path,
                 status=status,
                 message=message,
+                runtime_state=self._serialize_runtime_state({}),
             )
             db.add(record)
         else:
@@ -282,6 +303,8 @@ class RecordService:
         record = db.query(VideoTaskRecord).filter(VideoTaskRecord.task_id == task_id).first()
         if record is None:
             return None
+        if "runtime_state" in kwargs:
+            kwargs["runtime_state"] = self._serialize_runtime_state(kwargs["runtime_state"])
         for key, value in kwargs.items():
             setattr(record, key, value)
         db.commit()

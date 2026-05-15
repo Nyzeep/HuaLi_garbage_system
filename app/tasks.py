@@ -48,6 +48,29 @@ def run_video_task(
         if progress_callback is not None:
             progress_callback(progress)
 
+    def update_runtime_state(runtime_state: dict) -> None:
+        processed_frames = int(runtime_state.get("processed_frames", 0) or 0)
+        total_frames = max(int(runtime_state.get("total_frames", 1) or 1), 1)
+        progress = int((processed_frames / total_frames) * 100)
+        active_alert_count = int(runtime_state.get("active_alert_count", 0) or 0)
+        highest_priority_alert = runtime_state.get("highest_priority_alert")
+
+        message = f"视频处理中 {progress}%"
+        if active_alert_count > 0 and highest_priority_alert:
+            message = f"视频处理中 {progress}% · 当前报警 {active_alert_count} 项 · 最高优先级 {highest_priority_alert}"
+
+        record_service.update_video_task(
+            db,
+            task_id,
+            message=message,
+            runtime_state={
+                "active_alerts": runtime_state.get("active_alerts", []),
+                "active_alert_count": active_alert_count,
+                "highest_priority_alert": highest_priority_alert,
+                "new_alert_count": int(runtime_state.get("new_alert_count", 0) or 0),
+            },
+        )
+
     try:
         record_service.update_video_task(
             db,
@@ -55,6 +78,7 @@ def run_video_task(
             status="processing",
             progress=5,
             message="视频任务开始处理",
+            runtime_state={},
         )
 
         stats = video_service.process_video(
@@ -62,10 +86,9 @@ def run_video_task(
             output_path=output_path,
             skip_frames=max(skip_frames, 1),
             progress_callback=update_progress,
+            status_callback=update_runtime_state,
         )
 
-        # Write alert summary first so /api/tasks completed response can immediately
-        # return stable alert_types without front-end race.
         record_service.create_video_alert_summary_record(db, task_id=task_id, stats=stats)
         record_service.update_video_task(
             db,
@@ -79,6 +102,12 @@ def run_video_task(
             total_detections=stats["total_detections"],
             total_alerts=stats["total_alerts"],
             video_info=stats["video_info"],
+            runtime_state={
+                "active_alerts": stats.get("active_alerts", []),
+                "active_alert_count": int(stats.get("active_alert_count", 0) or 0),
+                "highest_priority_alert": stats.get("highest_priority_alert"),
+                "new_alert_count": int(stats.get("new_alert_count", 0) or 0),
+            },
             error_detail=None,
         )
 
@@ -94,6 +123,7 @@ def run_video_task(
             status="failed",
             progress=0,
             message="视频处理失败",
+            runtime_state={},
             error_detail=str(exc),
         )
         raise

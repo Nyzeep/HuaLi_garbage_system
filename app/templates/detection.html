@@ -540,6 +540,16 @@ body { font-family: 'Inter', -apple-system, sans-serif; }
                 </svg>
                 视频结果
               </h2>
+              <div id="video-active-alert-summary" class="hidden mb-4 rounded-2xl border border-red-200 bg-red-50 p-4">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                  <div>
+                    <div class="font-bold text-red-700">当前激活报警</div>
+                    <div class="text-sm text-red-600" id="video-active-alert-summary-text">暂无报警</div>
+                  </div>
+                  <span id="video-active-alert-count-badge" class="stat-badge bg-red-100 text-red-600">0 项</span>
+                </div>
+                <div id="video-active-alert-list" class="space-y-2"></div>
+              </div>
               <div id="video-results-empty" class="text-center py-8">
                 <div class="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
                   <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -578,6 +588,34 @@ const classIconMap = {
   fire: '🔥',
   smoke: '💨'
 };
+
+function renderVideoActiveAlerts(task) {
+  const activeAlerts = Array.isArray(task.active_alerts) ? task.active_alerts : [];
+  const summary = document.getElementById('video-active-alert-summary');
+  const summaryText = document.getElementById('video-active-alert-summary-text');
+  const badge = document.getElementById('video-active-alert-count-badge');
+  const list = document.getElementById('video-active-alert-list');
+
+  if (!activeAlerts.length) {
+    summary.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  summary.classList.remove('hidden');
+  const highest = task.highest_priority_alert || activeAlerts[0].class_name || '未知事件';
+  const newCount = Number(task.new_alert_count || 0);
+  summaryText.textContent = `最高优先级：${highest}${newCount > 0 ? ` · 本轮新增 ${newCount} 项` : ''}`;
+  badge.textContent = `${activeAlerts.length} 项`;
+  list.innerHTML = activeAlerts.map((item, index) => `
+    <div class="flex items-center justify-between rounded-xl bg-white/80 px-3 py-2">
+      <div class="text-sm font-medium text-gray-800">${index + 1}. ${item.class_name || '未知事件'}</div>
+      <span class="stat-badge ${item.state === 'new' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'}">
+        ${item.state === 'new' ? '新触发' : '持续提示'}
+      </span>
+    </div>
+  `).join('');
+}
 
 function switchTab(tab) {
   ['upload', 'camera', 'video'].forEach((name) => {
@@ -997,6 +1035,7 @@ async function pollVideoTaskStatus(taskId) {
     document.getElementById('video-progress-bar').style.width = `${progress}%`;
     document.getElementById('video-progress-text').textContent = result.message || `处理中 ${progress}%`;
     document.getElementById('video-processing-text').textContent = result.message || '处理中...';
+    renderVideoActiveAlerts(result);
 
     if (videoStartTime) {
       const elapsed = Math.floor((Date.now() - videoStartTime) / 1000);
@@ -1021,6 +1060,11 @@ function applyCompletedVideoResult(result) {
   document.getElementById('video-stat-frames').textContent = String(stats.total_frames || 0);
   document.getElementById('video-stat-detected').textContent = String(stats.total_detections || 0);
   document.getElementById('video-stat-alerts').textContent = String(stats.total_alerts || 0);
+  renderVideoActiveAlerts({
+    active_alerts: stats.active_alerts || [],
+    highest_priority_alert: stats.highest_priority_alert,
+    new_alert_count: stats.new_alert_count || 0,
+  });
 
   document.getElementById('video-progress-percent').textContent = '100%';
   document.getElementById('video-progress-bar').style.width = '100%';
@@ -1100,6 +1144,8 @@ function resetVideoStats() {
   document.getElementById('video-results-list').innerHTML = '';
   document.getElementById('video-results-empty').classList.remove('hidden');
   document.getElementById('video-results-list').classList.add('hidden');
+  document.getElementById('video-active-alert-summary').classList.add('hidden');
+  document.getElementById('video-active-alert-list').innerHTML = '';
 }
 
 function addVideoResult(result) {

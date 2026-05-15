@@ -113,10 +113,13 @@ class VideoTaskStatusResponse(BaseModel):
     message: str
     result_video: str | None = None
     stats: dict[str, Any] | None = None
+    active_alerts: list[dict[str, Any]] = Field(default_factory=list)
+    active_alert_count: int = 0
+    highest_priority_alert: str | None = None
+    new_alert_count: int = 0
 
 
 class Base64ImageRequest(BaseModel):
     image: str = Field(..., min_length=16)
-
 
 
